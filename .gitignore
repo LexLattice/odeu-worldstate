@@ -1,0 +1,33 @@
+# Local design and implementation working set
+/.working/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated output
+node_modules/
+dist/
+build/
+coverage/
+.next/
+.turbo/
+
+# Runtime data
+*.sqlite
+*.sqlite-journal
+*.db
+
+# Logs and caches
+*.log
+.cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# Editor and operating-system metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
