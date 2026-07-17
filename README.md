@@ -22,9 +22,11 @@ The first build target is deliberately narrow: demonstrate one person capturing 
 idea, seeing where it fits, delegating bounded work to Codex, and receiving the result
 back in the same conceptual structure.
 
-> **Project status:** pre-implementation design scaffold. The documents in this
-> repository describe intended behavior; they do not claim that a working runtime or
-> interface exists yet.
+> **Project status:** v0 foundation. The repository now contains a deterministic
+> worldstate kernel, a responsive workbench, browser persistence adapters, fixture and
+> live placement gateways, and replay and guarded-live Codex adapters. The workbench is
+> currently a fixture-backed demonstration rather than a fully wired product. No live
+> model or Codex execution is claimed by the included demo.
 
 ## Why a worldstate?
 
@@ -37,19 +39,27 @@ update. Once reviewed, that update becomes part of a concrete project worldstate
 can be reused without permanently carrying the original transcript in active context.
 The transcript remains inspectable as provenance.
 
-## Intended MVP
+## Implemented foundation
 
-- A hierarchical worldstate for a small number of real projects.
-- Text or voice capture of a new idea.
-- GPT-5.6-assisted placement that proposes where the idea fits, what it relates to,
-  and what remains uncertain.
-- A visible review boundary before the proposed update becomes canonical state.
-- Outline, Map, Timeline, and Focus views over the same underlying objects.
-- A least-context agent brief generated from a selected project slice.
-- One real Codex work loop whose artifacts, checks, and unresolved questions return as
-  evidence rather than automatic truth.
-- Conceptual genealogy: ideas may be refined, split, superseded, challenged, or
-  retired without losing where they came from.
+- An append-only, revisioned kernel with deterministic reduction, typed objects and
+  relations, conceptual genealogy, compensation, and idempotent commands.
+- A visible placement receipt and explicit semantic commit boundary.
+- Outline, Map, Timeline, and Focus projections with shared selection and identity.
+- Least-context agent briefs that omit private nodes and preserve evidence requirements.
+- A deterministic placement fixture plus an opt-in structured-output model gateway.
+- A brief-bound Codex fixture replay plus an opt-in live adapter with signed run
+  authorization, short-lived run-scoped single use, an authoritative-ledger check and
+  persistent claim under one shared per-run guard, an exclusive worktree lease, exact
+  revision and clean Git-base checks, isolated configuration, disabled network access,
+  and observed SDK evidence kept separate from model claims.
+- Validated in-memory and IndexedDB ledger stores with full-ledger-version
+  compare-and-swap and immutable-history prefix checks.
+- Separate commit, dispatch, and reconciliation gates; returned work never becomes
+  canonical state automatically.
+
+Still to do for the MVP is wiring the workbench to the kernel, persistence, and server
+gateways as one end-to-end application, then exercising and validating one real model
+placement and one real Codex run. Voice capture is also not implemented yet.
 
 ## Example journey
 
@@ -80,12 +90,48 @@ evidence. The person then decides whether and how that result updates the worlds
 - [Terminology](docs/terminology.md)
 - [Contributing](CONTRIBUTING.md)
 
+## Run locally
+
+Use Node.js 24 and npm 11:
+
+```bash
+npm ci
+cp .env.example .env
+npm run dev
+```
+
+The defaults are deliberately safe: deterministic manager fixtures and a fixture
+Codex replay. They need no credentials. Run the full local verification suite with:
+
+```bash
+npm run verify
+```
+
+Set `ODEU_MANAGER_MODE=live` only with a server-side `OPENAI_API_KEY`. Live Codex mode
+is a local/container integration surface, not a browser toggle: it requires an
+authorized kernel run, an exact current revision, an exact Git commit, an isolated
+Codex home, a validated current ledger export outside the worker boundary, and normally
+a clean linked worktree with no ignored files. The configured ledger path and its
+parents cannot be symlinks. The adapter reduces queued run state and creates its
+persistent dispatch claim while holding the same per-run guard required by every
+pre-dispatch cancellation or status writer, then leases the worktree for the full
+execution. A blocked run returns evidence without a closure; its domain state is
+resumable, but v0 does not yet implement Codex thread resume. See
+[.env.example](.env.example) for the configuration boundary.
+
 ## Development provenance
 
-The runtime contribution of GPT-5.6 and Codex described above is an intended MVP
-contract, not yet an implementation claim. As the project is built, this section will
-be expanded with dated build provenance, the implemented feature boundary, and
-verification instructions.
+The v0 foundation was scaffolded and verified on 2026-07-16. Its home-move journey is
+an authored deterministic fixture identified as `home-move-fixture-replay-v0`; it is
+not a recording and never represents a historical or live worker run. The live
+placement path targets GPT-5.6 through the OpenAI Responses API, but was not exercised
+without credentials. The guarded live Codex path was implemented against the Codex
+SDK, but has likewise not been claimed as an executed end-to-end run.
+
+Unit, integration, browser-journey, responsive, and automated accessibility checks
+cover the implemented foundation. Passing tests establish contract behavior in this
+repository; they do not turn fixture evidence or model reports into verified real-world
+outcomes.
 
 ## License
 

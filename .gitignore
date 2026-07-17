@@ -13,6 +13,9 @@ build/
 coverage/
 .next/
 .turbo/
+*.tsbuildinfo
+playwright-report/
+test-results/
 
 # Runtime data
 *.sqlite

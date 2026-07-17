@@ -1,0 +1,90 @@
+import { describe, expect, it } from "vitest";
+
+import { compileCodexPrompt } from "@/adapters/codex/prompt";
+import { AgentBriefSchema } from "@/domain/schema";
+
+import { domainBriefToCodexRunRequest } from "./domain-brief-to-codex";
+
+const domainBrief = AgentBriefSchema.parse({
+  id: "brief-home-move-001",
+  baseRevisionId: "rev-home-move-019",
+  artifactBaseRef: "commit:008a1a7",
+  targetNodeId: "task-compare-quotes",
+  goal: "Add a moving-cost comparison tool.",
+  doneMeans: ["Two provider totals can be compared", "Focused checks pass"],
+  sharedNodes: [
+    {
+      id: "task-compare-quotes",
+      scopeId: "project-home-move",
+      kind: "Task",
+      title: "Compare provider quotes",
+      description: "Add a simple comparison to the local planning page.",
+      visibility: "shared",
+      sourceRefs: ["source-home-move-001"],
+      data: {},
+      createdRevisionId: "rev-home-move-019",
+    },
+    {
+      id: "artifact-planning-page",
+      scopeId: "project-home-move",
+      kind: "Artifact",
+      title: "Local planning page",
+      visibility: "shared",
+      sourceRefs: [],
+      data: {},
+      createdRevisionId: "rev-home-move-012",
+    },
+    {
+      id: "question-storage",
+      scopeId: "project-home-move",
+      kind: "OpenQuestion",
+      title: "Compare recurring storage separately?",
+      visibility: "shared",
+      sourceRefs: [],
+      data: {},
+      createdRevisionId: "rev-home-move-019",
+    },
+  ],
+  sharedRelations: [],
+  omittedContext: [
+    {
+      nodeId: "private-household-finance",
+      title: "Household account details",
+      reason: "private",
+    },
+  ],
+  environment: "Isolated repository worktree",
+  agentProfile: "Codex repo worker",
+  allowedActions: ["Edit the scoped local artifact", "Run focused checks"],
+  deniedActions: ["Publish or push changes"],
+  confirmationRequired: ["Add a dependency"],
+  evidenceContract: {
+    requirements: [
+      {
+        id: "check-focused-tests",
+        label: "Focused tests pass",
+        kind: "test",
+        required: true,
+      },
+    ],
+    policy: { blockIntegration: true },
+  },
+  escalationPath: "Return blocked rather than broadening scope.",
+});
+
+describe("domainBriefToCodexRunRequest", () => {
+  it("sends only the execution projection across the server boundary", () => {
+    const request = domainBriefToCodexRunRequest(domainBrief, "request-agent-001");
+
+    expect(request.brief.context.omittedCount).toBe(1);
+    expect(JSON.stringify(request)).not.toContain("Household account details");
+    expect(request.brief.unknowns).toContain("Compare recurring storage separately?");
+    expect(request.brief.evidenceContract.blockIntegration).toBe(true);
+    expect(request.brief.evidenceContract.requiredChecks[0]?.kind).toBe("test");
+    expect(request.brief.evidenceContract.expectedArtifacts).toEqual([]);
+
+    const prompt = compileCodexPrompt(request.brief);
+    expect(prompt).not.toContain("Household account details");
+    expect(prompt).toContain('"omittedContextCount": 1');
+  });
+});

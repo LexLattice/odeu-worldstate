@@ -1,7 +1,22 @@
-# Proposed architecture
+# MVP architecture
 
-This document describes the intended architecture of the first ODEU Worldstate MVP.
-No runtime implementation is claimed by this design scaffold.
+This document describes the architecture of the first ODEU Worldstate MVP. The v0
+foundation implements the kernel contracts and each principal adapter boundary. Its
+workbench still runs an authored fixture journey; browser state, persistence, and the
+server gateways are not yet connected as one end-to-end product.
+
+## Implementation boundary
+
+| Surface | v0 status |
+| --- | --- |
+| Worldstate kernel | Implemented and contract-tested as an append-only deterministic reducer |
+| Worldstate Studio | Implemented as a responsive fixture-backed workbench |
+| Placement manager | Deterministic fixture and opt-in live structured-output gateway implemented |
+| Projection compiler | Least-context execution projection and privacy checks implemented |
+| Codex adapter | Brief-bound fixture replay and guarded opt-in live adapter implemented |
+| Persistence | Validated memory and IndexedDB adapters with full-ledger CAS and immutable-prefix checks implemented |
+| End-to-end product wiring | Not yet implemented |
+| Live provider/worker proof | Not yet exercised or claimed |
 
 ## System invariant
 
@@ -12,7 +27,7 @@ replace it.
 ```mermaid
 flowchart LR
     H["Human"] --> S["Chat or voice source event"]
-    S --> P["GPT-5.6 placement proposal"]
+    S --> P["Manager placement proposal"]
     P --> R["Human review"]
     R -->|accept| W["Canonical worldstate"]
     R -->|revise or reject| P
@@ -51,7 +66,8 @@ later interpretation can be audited without treating an obsolete idea as current
 The manager interprets source events against the current state. Its jobs are to:
 
 - select the relevant project and scope;
-- ask GPT-5.6 for a structured placement or reconciliation proposal;
+- obtain a structured placement or reconciliation proposal from a deterministic
+  fixture or an explicitly configured model;
 - preserve uncertainty and offer alternative placements when needed;
 - validate proposed deltas against kernel constraints;
 - prepare reviewable receipts for the human;
@@ -79,8 +95,8 @@ projections of the same state:
 
 Changing views preserves node identity, meaning, status, provenance, selection, and
 authority. Only arrangement, density, navigation, disclosure, and salience may morph.
-These are proposed local product profiles based on borrowed Morphic UX doctrine, not
-implemented or upstream-approved profiles.
+These are implemented local product projections based on borrowed Morphic UX doctrine;
+they are not upstream-approved profiles.
 
 ### 4. Projection and agent boundary
 
@@ -94,15 +110,30 @@ a bounded brief containing only what the run needs:
 - selected artifacts and environment references;
 - expected return evidence.
 
-The first reference adapter is intended for Codex. Other agents may later implement
-the same projection and closure contracts without changing the kernel.
+The first reference adapter is implemented for Codex in replay and live modes. Replay
+accepts only its exact fixture brief. Live mode requires a signed authorization derived
+from an authorized kernel run, exact worldstate and Git bases, a constrained worktree,
+an isolated runtime environment, and disabled worker network access. Capabilities are
+short-lived and atomically consumed once per run on the execution host. The host
+re-reduces a validated current ledger export and creates the persistent dispatch claim
+under one per-run guard. Every authoritative pre-dispatch cancellation or lifecycle
+writer must use the same guard, so cancellation becomes unavailable once dispatch
+linearizes. The configured ledger file and its parent path cannot be symlinks, keeping
+atomic replacement at the configured path observable. The host also requires the run
+still be queued and live and holds an exclusive worktree lease through execution. The
+worktree must be clean and contain no ignored files; its toolchain belongs outside the
+worker-visible tree. Agent reports are claims; SDK file and command events are retained
+separately as observations. A blocked report remains a non-closure evidence object; the
+v0 adapter does not yet resume its Codex thread. Other agents may later implement the
+same projection and closure contracts without changing the kernel.
 
 ### 5. Source and evidence archive
 
-Raw conversations, voice transcriptions, files, commits, test results, and agent logs
-remain inspectable artifacts. They do not need to reside permanently in the manager's
-active context. Canonical nodes keep provenance references so supporting material can
-be retrieved when it becomes relevant.
+The target archive retains raw conversations, voice transcriptions, files, commits,
+test results, and agent logs as inspectable artifacts. They do not need to reside
+permanently in the manager's active context. The kernel already binds canonical nodes
+to provenance references; durable source-archive ingestion remains future integration
+work.
 
 ## ODEU lanes
 
