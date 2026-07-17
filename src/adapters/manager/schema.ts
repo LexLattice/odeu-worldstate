@@ -34,13 +34,19 @@ export type WorldstateRelationKind = z.infer<
 
 const IdentifierSchema = z.string().trim().min(1).max(240);
 const HumanTextSchema = z.string().trim().min(1).max(4_000);
+export const MANAGER_PROPOSED_SUMMARY_MAX_LENGTH = 2_000;
 
 export const PlacementContextNodeSchema = z
   .object({
     id: IdentifierSchema,
     kind: WorldstateNodeKindSchema,
     title: z.string().trim().min(1).max(300),
-    summary: z.string().trim().max(2_000).nullable().default(null),
+    summary: z
+      .string()
+      .trim()
+      .max(MANAGER_PROPOSED_SUMMARY_MAX_LENGTH)
+      .nullable()
+      .default(null),
     scopeId: IdentifierSchema,
     visibility: z.enum(["shared", "private"]).default("shared"),
   })
@@ -155,7 +161,11 @@ export const ManagerPlacementInterpretationSchema = z
     breadcrumb: z.array(z.string().trim().min(1).max(300)).max(12),
     proposedKind: WorldstateNodeKindSchema,
     proposedTitle: z.string().trim().min(1).max(300),
-    proposedSummary: z.string().trim().min(1).max(2_000),
+    proposedSummary: z
+      .string()
+      .trim()
+      .min(1)
+      .max(MANAGER_PROPOSED_SUMMARY_MAX_LENGTH),
     rationale: z.string().trim().min(1).max(2_000),
     confidence: z.enum(["high", "medium", "low"]),
     uncertainty: z.array(z.string().trim().min(1).max(1_000)).max(12),
@@ -237,7 +247,11 @@ export const PlacementReceiptSchema = z
         nodeId: IdentifierSchema,
         kind: WorldstateNodeKindSchema,
         title: z.string().trim().min(1).max(300),
-        summary: z.string().trim().min(1).max(2_000),
+        summary: z
+          .string()
+          .trim()
+          .min(1)
+          .max(MANAGER_PROPOSED_SUMMARY_MAX_LENGTH),
       })
       .strict(),
     rationale: z.string().trim().min(1).max(2_000),
@@ -293,7 +307,11 @@ const NodeAddOperationSchema = z
         kind: WorldstateNodeKindSchema,
         scopeId: IdentifierSchema,
         title: z.string().trim().min(1).max(300),
-        summary: z.string().trim().min(1).max(2_000),
+        summary: z
+          .string()
+          .trim()
+          .min(1)
+          .max(MANAGER_PROPOSED_SUMMARY_MAX_LENGTH),
         originSourceId: IdentifierSchema,
       })
       .strict(),

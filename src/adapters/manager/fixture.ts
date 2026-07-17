@@ -1,8 +1,30 @@
 import {
+  MANAGER_PROPOSED_SUMMARY_MAX_LENGTH,
   ManagerPlacementInterpretationSchema,
   type ManagerPlacementInterpretation,
   type PlacementRequest,
 } from "./schema";
+
+const FIXTURE_SOURCE_EXCERPT_NOTICE =
+  "Fixture summary is excerpted; review the preserved original source.";
+
+function summaryFromSource(source: string): {
+  readonly text: string;
+  readonly excerpted: boolean;
+} {
+  if (source.length <= MANAGER_PROPOSED_SUMMARY_MAX_LENGTH) {
+    return { text: source, excerpted: false };
+  }
+
+  let excerpt = source
+    .slice(0, MANAGER_PROPOSED_SUMMARY_MAX_LENGTH - 1)
+    .trimEnd();
+  if (/[\uD800-\uDBFF]$/.test(excerpt)) {
+    excerpt = excerpt.slice(0, -1);
+  }
+
+  return { text: `${excerpt}…`, excerpted: true };
+}
 
 function titleFromSource(source: string): string {
   const normalized = source.toLowerCase();
@@ -59,6 +81,7 @@ export function interpretFixturePlacement(
   const isCostComparison = ["cost", "compare", "comparison", "quote"].some(
     (keyword) => normalizedSource.includes(keyword),
   );
+  const sourceSummary = summaryFromSource(request.source.text);
   const location = chooseLocation(request);
   const project =
     request.projection.nodes.find(
@@ -75,11 +98,14 @@ export function interpretFixturePlacement(
       breadcrumb: ["World"],
       proposedKind: "Idea",
       proposedTitle: titleFromSource(request.source.text),
-      proposedSummary: request.source.text,
+      proposedSummary: sourceSummary.text,
       rationale:
         "The fixture manager cannot place this source without a bounded project node.",
       confidence: "low",
-      uncertainty: ["No project node was supplied in the bounded projection."],
+      uncertainty: [
+        "No project node was supplied in the bounded projection.",
+        ...(sourceSummary.excerpted ? [FIXTURE_SOURCE_EXCERPT_NOTICE] : []),
+      ],
       conflicts: [],
       alternatives: [],
       affectedNodeIds: [],
@@ -103,14 +129,17 @@ export function interpretFixturePlacement(
     proposedTitle: titleFromSource(request.source.text),
     proposedSummary: isCostComparison
       ? "Create a small comparison tool for moving-provider costs and return focused implementation evidence."
-      : request.source.text,
+      : sourceSummary.text,
     rationale: isCostComparison
       ? "The request is actionable work and its cost-comparison language makes the budget area the most relevant placement."
       : "The deterministic fixture places actionable work in the selected area, or at project level when no area is selected.",
     confidence: isCostComparison ? "high" : "medium",
     uncertainty: isCostComparison
       ? ["Recurring storage costs may need a separate comparison."]
-      : ["Fixture mode does not infer details beyond the supplied source."],
+      : [
+          "Fixture mode does not infer details beyond the supplied source.",
+          ...(sourceSummary.excerpted ? [FIXTURE_SOURCE_EXCERPT_NOTICE] : []),
+        ],
     conflicts: [],
     alternatives: project
       ? [

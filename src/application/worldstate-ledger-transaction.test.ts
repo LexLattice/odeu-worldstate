@@ -113,7 +113,7 @@ describe("worldstate ledger transactions", () => {
 
   it("preserves exact command replay without duplicating events or advancing time", async () => {
     const initial = seedDocument();
-    const store = createMemoryWorldstateLedgerStore([initial]);
+    const { store, putCount } = countingStore(initial);
     const service = createWorldstateLedgerTransactionService({
       store,
       now: () => TRANSACTION_UPDATED_AT,
@@ -139,6 +139,7 @@ describe("worldstate ledger transactions", () => {
     expect(second.document.events).toEqual(initial.events);
     expect(second.document.updatedAt).toBe(INITIAL_UPDATED_AT);
     expect(second.version).toEqual(ledgerVersion(initial));
+    expect(putCount()).toBe(2);
   });
 
   it("surfaces a store conflict when a caller publishes a stale snapshot", async () => {

@@ -164,6 +164,8 @@ export async function appendWorldstateLedgerEvents(input: {
     );
   }
 
+  // An exact replay is a semantic no-op, but it must still CAS-check the
+  // supplied base so a stale session cannot reinstall an outdated ledger.
   await input.store.put(document, expectedVersion);
 
   return {

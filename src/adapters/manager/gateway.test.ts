@@ -124,6 +124,72 @@ describe("manager placement gateway", () => {
     expect(Object.isFrozen(first.body.delta?.operations)).toBe(true);
   });
 
+  it("bounds a long fixture source without rejecting the valid request", async () => {
+    const sourceText = "x".repeat(4_000);
+
+    const result = await placeSource(
+      {
+        ...request,
+        source: { ...request.source, text: sourceText },
+      },
+      { environment: { ODEU_MANAGER_MODE: "fixture" } },
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body.ok).toBe(true);
+    if (!result.body.ok) throw new Error("Expected fixture placement success.");
+
+    expect(result.body.receipt.proposed.summary).toHaveLength(2_000);
+    expect(result.body.receipt.proposed.summary).toMatch(/…$/);
+    expect(result.body.receipt.uncertainty).toContain(
+      "Fixture summary is excerpted; review the preserved original source.",
+    );
+    expect(result.body.delta?.operations[0]).toMatchObject({
+      op: "node.add",
+      node: { summary: result.body.receipt.proposed.summary },
+    });
+
+    const clarification = await placeSource(
+      {
+        ...request,
+        source: { ...request.source, text: sourceText },
+        projection: {
+          ...request.projection,
+          projectId: null,
+          nodes: [],
+          relations: [],
+        },
+      },
+      { environment: { ODEU_MANAGER_MODE: "fixture" } },
+    );
+
+    expect(clarification.status).toBe(200);
+    expect(clarification.body.ok).toBe(true);
+    if (!clarification.body.ok) {
+      throw new Error("Expected fixture clarification success.");
+    }
+    expect(clarification.body.receipt.proposed.summary).toEqual(
+      result.body.receipt.proposed.summary,
+    );
+    expect(clarification.body.delta).toBeNull();
+  });
+
+  it("does not split a Unicode character at the fixture summary boundary", async () => {
+    const sourceText = `${"x".repeat(1_998)}😀${"y".repeat(2_000)}`;
+    expect(sourceText).toHaveLength(4_000);
+
+    const result = await placeSource(
+      { ...request, source: { ...request.source, text: sourceText } },
+      { environment: { ODEU_MANAGER_MODE: "fixture" } },
+    );
+
+    expect(result.body.ok).toBe(true);
+    if (!result.body.ok) throw new Error("Expected fixture placement success.");
+    expect(result.body.receipt.proposed.summary).toBe(
+      `${"x".repeat(1_998)}…`,
+    );
+  });
+
   it("reports live mode unavailable instead of silently using fixtures", async () => {
     const result = await placeSource(request, {
       environment: { ODEU_MANAGER_MODE: "live" },

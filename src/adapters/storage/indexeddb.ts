@@ -37,6 +37,9 @@ function database(): Promise<IDBPDatabase<WorldstateDatabase>> {
       const store = db.createObjectStore(DOCUMENT_STORE, { keyPath: "projectId" });
       store.createIndex("by-updated-at", "updatedAt");
     },
+  }).catch((error: unknown) => {
+    databasePromise = null;
+    throw error;
   });
   return databasePromise;
 }
