@@ -1,8 +1,8 @@
 # Contributing
 
-ODEU Worldstate is currently a design scaffold for an early MVP. Contributions are
-welcome, but claims should stay proportional to what has actually been implemented and
-verified.
+ODEU Worldstate currently has a tested v0 foundation and an incomplete end-to-end MVP.
+Contributions are welcome, but claims should stay proportional to what has actually
+been implemented and verified.
 
 ## Before proposing a change
 
@@ -46,12 +46,14 @@ When documenting a new interaction, include:
 
 ## Code changes
 
-The implementation stack and its build commands have not yet been selected. Once code
-exists, changes should include focused tests for the affected semantic transitions and
-clear instructions for reproducing verification.
+Use Node.js 24 and npm 11. Install the locked dependency graph with `npm ci`, run local
+development with `npm run dev`, and verify the full foundation with `npm run verify`.
+Changes should include focused tests for affected semantic transitions and clear
+instructions for reproducing any additional verification.
 
-Until then, avoid adding framework boilerplate that silently decides architecture or
-UX semantics before the relevant contract is written.
+Keep runtime validation and TypeScript contracts aligned. Framework or renderer
+mechanics may not silently decide worldstate meaning, authority, evidence posture, or
+UX semantics outside the relevant contract.
 
 ## Pull requests
 

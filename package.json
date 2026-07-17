@@ -1,0 +1,54 @@
+{
+  "name": "@lexlattice/odeu-worldstate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A user-owned semantic workbench for worldstate-mediated, agent-assisted work.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": "24.x"
+  },
+  "packageManager": "npm@11.9.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "check": "npm run lint && npm run typecheck && npm run test",
+    "verify": "npm run check && npm run build && npm run test:e2e"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "0.144.5",
+    "@xyflow/react": "12.11.2",
+    "idb": "8.0.3",
+    "next": "16.2.10",
+    "openai": "6.47.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "server-only": "0.0.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.2.10",
+    "jsdom": "29.1.1",
+    "postcss": "8.5.19",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10"
+  },
+  "overrides": {
+    "postcss": "8.5.19"
+  }
+}

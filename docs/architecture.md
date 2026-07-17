@@ -1,7 +1,24 @@
-# Proposed architecture
+# MVP architecture
 
-This document describes the intended architecture of the first ODEU Worldstate MVP.
-No runtime implementation is claimed by this design scaffold.
+This document describes the architecture of the first ODEU Worldstate MVP. The v0
+foundation implements the kernel contracts and each principal adapter boundary. The
+current workbench connects browser state, IndexedDB, the placement API, reduced
+projections, and human semantic commit as one durable slice. It stops before agent
+brief compilation, dispatch, worker observation, and result reconciliation.
+
+## Implementation boundary
+
+| Surface | v0 status |
+| --- | --- |
+| Worldstate kernel | Implemented and contract-tested as an append-only deterministic reducer |
+| Worldstate Studio | Reduced-ledger Outline, Map, Timeline, and Focus wired through durable placement review and commit |
+| Placement manager | Deterministic fixture and opt-in live structured-output gateway implemented |
+| Projection compiler | Least-context execution projection and privacy checks implemented |
+| Codex adapter | Brief-bound fixture replay and guarded opt-in live adapter implemented |
+| Persistence | IndexedDB is active in the workbench; batch validation, immutable-prefix checks, and full-ledger CAS gate normal writes, while confirmed sandbox reset uses one atomic project replacement |
+| Source → placement → commit wiring | Implemented and exercised with the deterministic placement route |
+| Agent execution/reconciliation wiring | Not yet implemented; Work is visibly unavailable |
+| Live provider/worker proof | Not yet exercised or claimed |
 
 ## System invariant
 
@@ -12,7 +29,7 @@ replace it.
 ```mermaid
 flowchart LR
     H["Human"] --> S["Chat or voice source event"]
-    S --> P["GPT-5.6 placement proposal"]
+    S --> P["Manager placement proposal"]
     P --> R["Human review"]
     R -->|accept| W["Canonical worldstate"]
     R -->|revise or reject| P
@@ -27,6 +44,25 @@ flowchart LR
 Both entry and return paths cross an explicit review boundary. A model may propose a
 worldstate delta, and an agent may provide a closure witness, but neither is thereby
 authorized to rewrite canonical state.
+
+The implemented runtime currently follows the left half only:
+
+```text
+typed source
+  → source.captured + exact shared-only request persisted atomically
+  → placement request dispatched
+  → exact manager exchange persisted as system evidence
+  → pending delta persisted without advancing the head
+  → human delta.accepted
+  → one new canonical revision
+```
+
+The request attempt and exact manager exchange are integrity-checked system evidence,
+not truth. Persisting the attempt before dispatch makes an interrupted request
+recoverable with its original source and selected target. Success receipts carry the
+request ID and are rejected if source, revision, scope, project, bounded targets, or
+request correlation disagree. A converted pending delta remains provisional in every
+projection until the reducer observes the human acceptance event.
 
 ## Layers
 
@@ -51,7 +87,8 @@ later interpretation can be audited without treating an obsolete idea as current
 The manager interprets source events against the current state. Its jobs are to:
 
 - select the relevant project and scope;
-- ask GPT-5.6 for a structured placement or reconciliation proposal;
+- obtain a structured placement or reconciliation proposal from a deterministic
+  fixture or an explicitly configured model;
 - preserve uncertainty and offer alternative placements when needed;
 - validate proposed deltas against kernel constraints;
 - prepare reviewable receipts for the human;
@@ -79,8 +116,13 @@ projections of the same state:
 
 Changing views preserves node identity, meaning, status, provenance, selection, and
 authority. Only arrangement, density, navigation, disclosure, and salience may morph.
-These are proposed local product profiles based on borrowed Morphic UX doctrine, not
-implemented or upstream-approved profiles.
+These are implemented local product projections based on borrowed Morphic UX doctrine;
+they are not upstream-approved profiles.
+
+The browser UI holds only presentation state such as the selected view, disclosure,
+draft text, and reset confirmation. Canonical nodes, relations, receipts, event history,
+and revision labels are rebuilt from the persisted ledger. Map coordinates are a
+deterministic projection artifact and never enter canonical state.
 
 ### 4. Projection and agent boundary
 
@@ -94,15 +136,31 @@ a bounded brief containing only what the run needs:
 - selected artifacts and environment references;
 - expected return evidence.
 
-The first reference adapter is intended for Codex. Other agents may later implement
-the same projection and closure contracts without changing the kernel.
+The first reference adapter is implemented for Codex in replay and live modes. Replay
+accepts only its exact fixture brief. Live mode requires a signed authorization derived
+from an authorized kernel run, exact worldstate and Git bases, a constrained worktree,
+an isolated runtime environment, and disabled worker network access. Capabilities are
+short-lived and atomically consumed once per run on the execution host. The host
+re-reduces a validated current ledger export and creates the persistent dispatch claim
+under one per-run guard. Every authoritative pre-dispatch cancellation or lifecycle
+writer must use the same guard, so cancellation becomes unavailable once dispatch
+linearizes. The configured ledger file and its parent path cannot be symlinks, keeping
+atomic replacement at the configured path observable. The host also requires the run
+still be queued and live and holds an exclusive worktree lease through execution. The
+worktree must be clean and contain no ignored files; its toolchain belongs outside the
+worker-visible tree. Agent reports are claims; SDK file and command events are retained
+separately as observations. A blocked report remains a non-closure evidence object; the
+v0 adapter does not yet resume its Codex thread. Other agents may later implement the
+same projection and closure contracts without changing the kernel.
 
 ### 5. Source and evidence archive
 
-Raw conversations, voice transcriptions, files, commits, test results, and agent logs
-remain inspectable artifacts. They do not need to reside permanently in the manager's
-active context. Canonical nodes keep provenance references so supporting material can
-be retrieved when it becomes relevant.
+The target archive retains raw conversations, voice transcriptions, files, commits,
+test results, and agent logs as inspectable artifacts. They do not need to reside
+permanently in the manager's active context. The kernel already binds canonical nodes
+to provenance references. The current slice stores typed text sources and exact
+placement request/response exchanges inside the local append-only ledger. Broader
+file, voice, and external source-archive ingestion remains future integration work.
 
 ## ODEU lanes
 
@@ -139,14 +197,14 @@ before a person commits a semantic update or delegates work.
 
 ## Core transitions
 
-1. **Capture:** retain the incoming message or voice transcription as a source event.
-2. **Interpret:** propose a typed placement against a specific worldstate revision.
-3. **Review:** show placement, relations, evidence, uncertainty, and alternatives.
-4. **Commit:** accept a bounded delta and record its provenance.
-5. **Project:** compile a least-context agent brief from the accepted state.
-6. **Execute:** let the agent act within its declared scope.
-7. **Witness:** return artifacts, checks, observed effects, and unresolved issues.
-8. **Reconcile:** propose, review, and optionally commit the resulting state change.
+1. **Capture — wired:** retain typed input as a durable source before any manager call.
+2. **Interpret — wired:** propose a typed placement against the exact current revision.
+3. **Review — wired:** show persisted placement, relations, evidence, uncertainty, and alternatives.
+4. **Commit — wired:** accept one bounded delta and record its provenance in one new revision.
+5. **Project — contract only:** compile a least-context agent brief from accepted state.
+6. **Execute — adapter only:** let the agent act within its declared scope.
+7. **Witness — contract only:** return artifacts, checks, observed effects, and unresolved issues.
+8. **Reconcile — contract only:** propose, review, and optionally commit the resulting state change.
 
 ## Initial non-goals
 

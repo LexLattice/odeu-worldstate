@@ -1,7 +1,8 @@
 # Product principles
 
-These principles govern the proposed MVP. They describe product intent, not current
-implementation behavior.
+These principles govern the MVP. They are normative product intent; current
+implementation claims and remaining boundaries are recorded in the README and
+architecture.
 
 ## 1. Model the concrete world
 
