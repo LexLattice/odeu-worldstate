@@ -60,7 +60,7 @@ describe("placementResponseToKernelDelta", () => {
     expect(delta?.operations[0]).toMatchObject({
       op: "node.add",
       node: {
-        governance: { standing: "suggested", approval: "required" },
+        governance: { standing: "adopted", approval: "granted" },
         sourceRefs: [request.source.sourceId],
       },
     });

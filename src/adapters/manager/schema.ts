@@ -219,6 +219,7 @@ export type ManagerPlacementInterpretation = z.infer<
 export const PlacementReceiptSchema = z
   .object({
     receiptId: IdentifierSchema,
+    requestId: IdentifierSchema,
     sourceId: IdentifierSchema,
     baseRevisionId: IdentifierSchema,
     scopeId: IdentifierSchema,
@@ -248,7 +249,39 @@ export const PlacementReceiptSchema = z
     proposedRelations: z.array(ProposedRelationSchema).max(20),
     clarificationQuestion: z.string().trim().min(1).max(1_000).nullable(),
   })
-  .strict();
+  .strict()
+  .superRefine((receipt, context) => {
+    if (
+      receipt.decisionState === "reviewable" &&
+      receipt.location.targetNodeId === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "a reviewable receipt must name a location target",
+        path: ["location", "targetNodeId"],
+      });
+    }
+    if (
+      receipt.decisionState === "needs_clarification" &&
+      receipt.clarificationQuestion === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "a clarification receipt must include a question",
+        path: ["clarificationQuestion"],
+      });
+    }
+    if (
+      receipt.decisionState === "reviewable" &&
+      receipt.clarificationQuestion !== null
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "a reviewable receipt cannot carry a clarification question",
+        path: ["clarificationQuestion"],
+      });
+    }
+  });
 
 const NodeAddOperationSchema = z
   .object({

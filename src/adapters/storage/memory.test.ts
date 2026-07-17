@@ -117,6 +117,23 @@ describe("project ledger storage", () => {
     expect(await store.get(document.projectId)).toEqual(document);
   });
 
+  it("atomically replaces one project only through the explicit reset contract", async () => {
+    const store = createMemoryLedgerStore({ eventSchema: EventSchema });
+    await store.put(document, null);
+    const resetDocument = {
+      ...document,
+      headRevisionId: "revision-reset",
+      events: [{ id: "event-reset", type: "delta.accepted" }],
+    };
+
+    await expect(store.replace(resetDocument, null)).rejects.toBeInstanceOf(
+      LedgerConflictError,
+    );
+    await store.replace(resetDocument, ledgerVersion(document));
+
+    expect(await store.get(document.projectId)).toEqual(resetDocument);
+  });
+
   it("validates event payloads on write", async () => {
     const store = createMemoryLedgerStore({ eventSchema: EventSchema });
     const invalid = { ...document, events: [{ id: "event-without-type" }] };

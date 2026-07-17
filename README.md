@@ -19,14 +19,18 @@ conversation or voice input
 ```
 
 The first build target is deliberately narrow: demonstrate one person capturing an
-idea, seeing where it fits, delegating bounded work to Codex, and receiving the result
-back in the same conceptual structure.
+idea, seeing where it fits, accepting it into a durable worldstate, then eventually
+delegating bounded work to Codex and receiving the result back in the same conceptual
+structure.
 
-> **Project status:** v0 foundation. The repository now contains a deterministic
-> worldstate kernel, a responsive workbench, browser persistence adapters, fixture and
-> live placement gateways, and replay and guarded-live Codex adapters. The workbench is
-> currently a fixture-backed demonstration rather than a fully wired product. No live
-> model or Codex execution is claimed by the included demo.
+> **Project status:** persisted-placement slice. The responsive workbench now wires a
+> typed text source through the fixture `/api/placement` boundary, persists the exact
+> source and bounded request before dispatch, then the manager exchange and pending
+> delta in IndexedDB, and creates one canonical revision only after an explicit human
+> semantic commit. Reload reconstructs the same request, receipt, disposition,
+> revision, and selection from durable state. Agent dispatch and result reconciliation
+> remain visibly unavailable in the workbench; no live model or Codex execution is
+> claimed.
 
 ## Why a worldstate?
 
@@ -43,8 +47,16 @@ The transcript remains inspectable as provenance.
 
 - An append-only, revisioned kernel with deterministic reduction, typed objects and
   relations, conceptual genealogy, compensation, and idempotent commands.
-- A visible placement receipt and explicit semantic commit boundary.
-- Outline, Map, Timeline, and Focus projections with shared selection and identity.
+- A browser session transaction layer that seeds once, validates event batches locally,
+  and publishes each operation with one full-ledger compare-and-swap.
+- Typed source capture, an integrity-checked attempt artifact persisted before the real
+  same-origin placement request, and durable retention of the exact request/response
+  exchange as evidence rather than canonical truth.
+- A visible placement receipt and explicit semantic commit boundary; persistence,
+  clarification, failure, stale-base, and conflict states fail closed.
+- Outline, Map, Timeline, and Focus projections derived from the reduced ledger, with
+  shared identity, persisted selection, provisional candidate overlays, and
+  deterministic projection-only graph layout.
 - Least-context agent briefs that omit private nodes and preserve evidence requirements.
 - A deterministic placement fixture plus an opt-in structured-output model gateway.
 - A brief-bound Codex fixture replay plus an opt-in live adapter with signed run
@@ -53,13 +65,17 @@ The transcript remains inspectable as provenance.
   revision and clean Git-base checks, isolated configuration, disabled network access,
   and observed SDK evidence kept separate from model claims.
 - Validated in-memory and IndexedDB ledger stores with full-ledger-version
-  compare-and-swap and immutable-history prefix checks.
-- Separate commit, dispatch, and reconciliation gates; returned work never becomes
-  canonical state automatically.
+  compare-and-swap, immutable-history prefix checks, and an explicit atomic project
+  replacement used only by the confirmed sandbox reset.
+- A separate Work region that truthfully reports agent execution as unavailable for
+  this slice; accepting placement does not compile a brief, create a run, or stage a
+  closure.
 
-Still to do for the MVP is wiring the workbench to the kernel, persistence, and server
-gateways as one end-to-end application, then exercising and validating one real model
-placement and one real Codex run. Voice capture is also not implemented yet.
+Still to do for the MVP is wiring agent-brief preview, authorization, worker return,
+evidence validation, and result reconciliation into the durable session. The live
+placement and guarded-live Codex adapters must then be exercised and validated with
+their real providers. Voice capture, correction/defer/reject controls, onboarding,
+multi-project routing, and Codex thread resume are not implemented yet.
 
 ## Example journey
 
@@ -69,9 +85,10 @@ A person says:
 
 Before changing anything, the system proposes a **Where this fits** receipt: the
 project, conceptual location, related goals, dependencies, uncertainty, and possible
-alternatives. After the person accepts the update, a bounded **Agent brief** can be
-sent to Codex. Codex returns a **Work result** with artifacts and verification
-evidence. The person then decides whether and how that result updates the worldstate.
+alternatives. The persisted-placement slice stops after the person accepts that
+update. In the intended next stages, a bounded **Agent brief** can be sent to Codex,
+which returns a **Work result** with artifacts and verification evidence for a second
+human decision.
 
 ## Design commitments
 
@@ -100,8 +117,10 @@ cp .env.example .env
 npm run dev
 ```
 
-The defaults are deliberately safe: deterministic manager fixtures and a fixture
-Codex replay. They need no credentials. Run the full local verification suite with:
+The defaults are deliberately safe: the workbench calls the deterministic placement
+fixture and exposes no worker dispatch control. The repository also contains fixture
+and guarded-live Codex adapter contracts, but they are not wired into this UI slice.
+Run the full local verification suite with:
 
 ```bash
 npm run verify
@@ -121,12 +140,14 @@ resumable, but v0 does not yet implement Codex thread resume. See
 
 ## Development provenance
 
-The v0 foundation was scaffolded and verified on 2026-07-16. Its home-move journey is
-an authored deterministic fixture identified as `home-move-fixture-replay-v0`; it is
-not a recording and never represents a historical or live worker run. The live
-placement path targets GPT-5.6 through the OpenAI Responses API, but was not exercised
-without credentials. The guarded live Codex path was implemented against the Codex
-SDK, but has likewise not been claimed as an executed end-to-end run.
+The v0 foundation was scaffolded and verified on 2026-07-16. On 2026-07-17, the
+home-move source → placement → semantic-commit path was wired through the browser
+ledger and exercised in deterministic fixture mode. The older authored Codex fixture
+`home-move-fixture-replay-v0` remains adapter test material; the workbench does not
+present it as a run. The live placement path targets GPT-5.6 through the OpenAI
+Responses API, but was not exercised without credentials. The guarded live Codex path
+was implemented against the Codex SDK, but has likewise not been claimed as an
+executed end-to-end run.
 
 Unit, integration, browser-journey, responsive, and automated accessibility checks
 cover the implemented foundation. Passing tests establish contract behavior in this

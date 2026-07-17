@@ -72,6 +72,32 @@ export function createIndexedDbLedgerStore<TEvent>(
         throw error;
       }
     },
+    async replace(document, expectedVersion) {
+      const parsed = parse(document);
+      const transaction = (await database()).transaction(
+        DOCUMENT_STORE,
+        "readwrite",
+      );
+      try {
+        const stored = await transaction.store.get(parsed.projectId);
+        const existing = stored ? parse(stored) : null;
+        assertExpectedLedgerVersion(
+          existing,
+          parsed.projectId,
+          expectedVersion,
+        );
+        await transaction.store.put(parsed);
+        await transaction.done;
+      } catch (error) {
+        try {
+          transaction.abort();
+          await transaction.done;
+        } catch {
+          // The transaction may already have aborted. Preserve the original error.
+        }
+        throw error;
+      }
+    },
     async list(): Promise<ProjectLedgerSummary[]> {
       const documents = await (await database()).getAll(DOCUMENT_STORE);
       return documents

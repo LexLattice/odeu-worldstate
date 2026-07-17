@@ -42,6 +42,16 @@ export function createMemoryLedgerStore<TEvent>(
       assertImmutableEventPrefix(existing, parsed);
       documents.set(parsed.projectId, copy(parsed));
     },
+    async replace(document, expectedVersion) {
+      const parsed = parse(document);
+      const existing = documents.get(parsed.projectId) ?? null;
+      assertExpectedLedgerVersion(
+        existing,
+        parsed.projectId,
+        expectedVersion,
+      );
+      documents.set(parsed.projectId, copy(parsed));
+    },
     async list(): Promise<ProjectLedgerSummary[]> {
       return [...documents.values()]
         .map(ledgerSummary)

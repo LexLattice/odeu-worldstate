@@ -53,6 +53,15 @@ export interface ProjectLedgerStore<TEvent> {
     document: LedgerDocument<TEvent>,
     expectedVersion: LedgerVersion | null,
   ): Promise<void>;
+  /**
+   * Atomically replace one complete project document, including its history.
+   * This is reserved for an explicit destructive reset; normal writes use the
+   * immutable-prefix compare-and-swap contract above.
+   */
+  replace(
+    document: LedgerDocument<TEvent>,
+    expectedVersion: LedgerVersion | null,
+  ): Promise<void>;
   list(): Promise<ProjectLedgerSummary[]>;
   delete(projectId: string): Promise<void>;
   clear(): Promise<void>;

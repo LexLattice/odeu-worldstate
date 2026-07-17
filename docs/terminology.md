@@ -27,7 +27,7 @@ schema names may evolve during implementation.
 | --- | --- | --- |
 | Suggested update | Worldstate delta proposal | A non-canonical candidate change to objects, relations, statuses, or scope |
 | Where this fits | Placement receipt | A reviewable account of proposed location, relations, rationale, uncertainty, and alternatives |
-| Add to my worldstate | Delta commit | Human acceptance of a bounded proposal into canonical state |
+| Adopt this placement | Delta commit | Human acceptance of a bounded proposal into canonical state |
 | Agent brief | Scoped runtime projection | The least-context goal, evidence, constraints, artifacts, permissions, and return contract given to a worker |
 | Ask Codex to work | Delegation transition | A separate authorization step that starts a worker run from an accepted brief |
 | Work result | Closure witness | Artifacts, checks, observations, effects, and unresolved issues returned by a worker |

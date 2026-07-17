@@ -65,6 +65,7 @@ function sameRelationMultiset(
  */
 export function placementResponseToKernelDelta(
   response: PlacementSuccessResponse,
+  options: { evidenceSourceId?: string } = {},
 ): WorldstateDelta | null {
   const parsed = PlacementSuccessResponseSchema.parse(response);
   if (parsed.delta === null) {
@@ -141,7 +142,7 @@ export function placementResponseToKernelDelta(
           description: operation.node.summary,
           visibility: "shared",
           knowledge: { standing: "draft", freshness: "current" },
-          governance: { standing: "suggested", approval: "required" },
+          governance: { standing: "adopted", approval: "granted" },
           work: { phase: "planned", verification: "unverified" },
           sourceRefs: [operation.node.originSourceId],
           data: {
@@ -184,7 +185,10 @@ export function placementResponseToKernelDelta(
     proposedBy: managerActor,
     operations,
     rationale: rationales,
-    sourceRefs: [parsed.delta.sourceId],
+    sourceRefs: [
+      parsed.delta.sourceId,
+      ...(options.evidenceSourceId ? [options.evidenceSourceId] : []),
+    ],
     uncertainty: parsed.receipt.uncertainty,
     alternatives: parsed.receipt.alternatives.map(
       (alternative) => `${alternative.targetTitle}: ${alternative.rationale}`,

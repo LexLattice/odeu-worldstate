@@ -92,6 +92,7 @@ export function materializePlacementProposal(
 
   const receipt = PlacementReceiptSchema.parse({
     receiptId: `receipt-${token}`,
+    requestId: request.requestId,
     sourceId: request.source.sourceId,
     baseRevisionId: request.baseRevisionId,
     scopeId: request.projection.scopeId,
