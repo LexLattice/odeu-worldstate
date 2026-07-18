@@ -11,6 +11,8 @@ describe("home-move fixture execution boundary", () => {
     const fixture = createPrivateProjectionFixture();
     const request = domainBriefToCodexRunRequest(
       fixture.brief,
+      fixture.ids.run,
+      "replay",
       "request-home-move-fixture-replay",
     );
     const result = runCodexReplay(request);
@@ -21,6 +23,7 @@ describe("home-move fixture execution boundary", () => {
       replayIdentity: "home-move-fixture-replay-v0",
     });
     expect(result.closure).toMatchObject({
+      runId: fixture.ids.run,
       briefId: fixture.brief.id,
       sourceRevisionIdUsed: fixture.state.canonical.head.id,
       artifactBaseRefUsed: fixture.brief.artifactBaseRef,
@@ -35,6 +38,8 @@ describe("home-move fixture execution boundary", () => {
     const fixture = createPrivateProjectionFixture();
     const request = domainBriefToCodexRunRequest(
       fixture.brief,
+      fixture.ids.run,
+      "replay",
       "request-home-move-privacy-check",
     );
     const prompt = compileCodexPrompt(request.brief);

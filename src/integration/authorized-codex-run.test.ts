@@ -39,6 +39,11 @@ describe("authorizedCodexRunRequest", () => {
     });
 
     expect(request.authorization).not.toBeNull();
+    expect(request).toMatchObject({
+      runId: fixture.ids.run,
+      mode: "live",
+      requestId: "request-authorized-live",
+    });
     if (!request.authorization) throw new Error("Authorization was not compiled.");
     expect(
       authorizationMatches(

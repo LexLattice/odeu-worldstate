@@ -1,6 +1,8 @@
 import type {
   AgentBrief,
   AgentRun,
+  ArtifactPromotionOutcome,
+  ArtifactPromotionProposal,
   ClosureWitness,
   EvidenceValidation,
   LedgerEvent,
@@ -44,6 +46,19 @@ export interface ManagerFailureProjection {
   readonly retriable: boolean;
 }
 
+export interface ArtifactPromotionProjection {
+  readonly proposal: ArtifactPromotionProposal;
+  readonly status:
+    | "proposed"
+    | "authorized"
+    | ArtifactPromotionOutcome["outcome"];
+  readonly proposedEventId: string;
+  readonly authorizedEventId?: string;
+  readonly requestSourceId?: string;
+  readonly outcomeEventIds: readonly string[];
+  readonly latestOutcome?: ArtifactPromotionOutcome;
+}
+
 export interface CanonicalProjection {
   readonly projectId: string;
   readonly head: RevisionRecord;
@@ -64,6 +79,9 @@ export interface OperationalProjection {
   readonly closures: Readonly<Record<string, ClosureWitness>>;
   readonly validations: Readonly<Record<string, EvidenceValidation>>;
   readonly latestValidationByClosure: Readonly<Record<string, string>>;
+  readonly artifactPromotions: Readonly<
+    Record<string, ArtifactPromotionProjection>
+  >;
   readonly selectedProjection: "outline" | "map" | "timeline" | "focus";
 }
 

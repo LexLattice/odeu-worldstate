@@ -11,8 +11,16 @@ import {
 
 describe("Codex execution integrity", () => {
   it("changes the digest when any worker-visible brief content changes", () => {
-    const fixture = createPrivateProjectionFixture();
-    const request = domainBriefToCodexRunRequest(fixture.brief, "request-digest");
+    const fixture = createPrivateProjectionFixture({
+      executionMode: "live",
+      artifactBaseRef: `git:${"a".repeat(40)}`,
+    });
+    const request = domainBriefToCodexRunRequest(
+      fixture.brief,
+      fixture.ids.run,
+      "live",
+      "request-digest",
+    );
     const original = executionBriefDigest(request.brief);
     const changed = executionBriefDigest({
       ...request.brief,

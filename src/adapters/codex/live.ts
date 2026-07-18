@@ -8,6 +8,11 @@ import { promisify } from "node:util";
 import { z } from "zod";
 
 import {
+  sealLiveWorkspaceCandidate,
+  type ArtifactCandidateReceipt,
+} from "@/adapters/artifact-promotion";
+
+import {
   claimQueuedRunAuthorization,
   RunAuthorizationConsumedError,
   RunClaimBusyError,
@@ -17,6 +22,7 @@ import {
   AuthoritativeLedgerSymlinkError,
   resolveAuthoritativeLedgerFilePath,
 } from "./ledger-file";
+import { assertCodexRequestMode } from "./mode";
 import { compileCodexPrompt } from "./prompt";
 import { assertCurrentRunIsQueued, LiveRunStateError } from "./run-state";
 import {
@@ -66,7 +72,10 @@ export class LiveCodexPreflightError extends Error {
 
 export class LiveCodexBlockedError extends Error {
   constructor(readonly blockedRun: AgentBlockedRun) {
-    const summary = blockedRun.report.unresolved.slice(0, 3).join("; ").slice(0, 2_000);
+    const summary = blockedRun.report.unresolved
+      .slice(0, 3)
+      .join("; ")
+      .slice(0, 2_000);
     super(
       summary
         ? `The Codex worker reported a blocked domain state: ${summary}. The v0 adapter does not support thread resume.`
@@ -78,6 +87,7 @@ export class LiveCodexBlockedError extends Error {
 
 const MAX_AUTHORIZATION_TTL_MS = 10 * 60 * 1_000;
 const MAX_CLOCK_SKEW_MS = 30 * 1_000;
+const GIT_NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
 
 function containsPath(parent: string, candidate: string): boolean {
   const path = relative(parent, candidate);
@@ -104,14 +114,58 @@ function authorizationWindowIsValid(
   );
 }
 
-async function git(workspace: string, args: string[]): Promise<string> {
-  const result = await execFile("git", ["-C", workspace, ...args], {
-    encoding: "utf8",
-  });
+export function isolatedPreflightGitEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    NODE_ENV: process.env.NODE_ENV ?? "production",
+    PATH: process.env.PATH ?? "",
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: GIT_NULL_DEVICE,
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  for (const name of [
+    "TMP",
+    "TEMP",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+  ]) {
+    const value = process.env[name];
+    if (value) environment[name] = value;
+  }
+  return environment;
+}
+
+export async function runPreflightGit(
+  workspace: string,
+  args: readonly string[],
+): Promise<string> {
+  const result = await execFile(
+    "git",
+    [
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      `core.hooksPath=${GIT_NULL_DEVICE}`,
+      "-c",
+      "credential.helper=",
+      "-C",
+      workspace,
+      ...args,
+    ],
+    {
+      encoding: "utf8",
+      env: isolatedPreflightGitEnvironment(),
+    },
+  );
   return result.stdout.trim();
 }
 
-function isolatedEnvironment(codexHome: string): Record<string, string> {
+export function isolatedEnvironment(codexHome: string): Record<string, string> {
   const environment: Record<string, string> = {
     HOME: codexHome,
     CODEX_HOME: codexHome,
@@ -131,6 +185,20 @@ function isolatedEnvironment(codexHome: string): Record<string, string> {
     if (value) environment[name] = value;
   }
   return environment;
+}
+
+/**
+ * The Codex process receives its API credential through the SDK, but worker
+ * commands inherit only this explicit non-secret allow-list. This prevents a
+ * repository command from observing the server credential or unrelated host
+ * environment variables.
+ */
+export function isolatedWorkerShellEnvironment(codexHome: string) {
+  const processEnvironment = isolatedEnvironment(codexHome);
+  return {
+    inherit: "none" as const,
+    set: processEnvironment,
+  };
 }
 
 function observedSdkEvidence(items: ThreadItem[]) {
@@ -190,11 +258,30 @@ async function preflightLiveRun(request: AgentRunRequest, preflightAt: Date) {
   const codexHomeInput = process.env.ODEU_CODEX_HOME?.trim();
   const ledgerFileInput = process.env.ODEU_CODEX_LEDGER_FILE?.trim();
   const secret = process.env.ODEU_CODEX_AUTH_SECRET?.trim();
-  const apiKey = process.env.CODEX_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim();
+  const apiKey =
+    process.env.CODEX_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim();
+  const repositoryId = process.env.ODEU_CODEX_REPOSITORY_ID?.trim();
+  const targetRef = process.env.ODEU_CODEX_PROMOTION_TARGET_REF?.trim();
+  const candidateStoreDirectory =
+    process.env.ODEU_CODEX_CANDIDATE_STORE?.trim();
+  const artifactSigningKeyId =
+    process.env.ODEU_CODEX_ARTIFACT_SIGNING_KEY_ID?.trim();
+  const artifactSigningSecret =
+    process.env.ODEU_CODEX_ARTIFACT_SIGNING_SECRET?.trim();
 
-  if (!workspaceInput || !codexHomeInput || !ledgerFileInput || !secret) {
+  if (
+    !workspaceInput ||
+    !codexHomeInput ||
+    !ledgerFileInput ||
+    !secret ||
+    !repositoryId ||
+    !targetRef ||
+    !candidateStoreDirectory ||
+    !artifactSigningKeyId ||
+    !artifactSigningSecret
+  ) {
     throw new LiveCodexConfigurationError(
-      "Live Codex mode requires ODEU_CODEX_WORKSPACE, ODEU_CODEX_HOME, ODEU_CODEX_LEDGER_FILE, and ODEU_CODEX_AUTH_SECRET.",
+      "Live Codex mode requires its workspace, isolated home, authoritative ledger, run-authority secret, repository identity, promotion target, external candidate store, and artifact-receipt signing configuration.",
     );
   }
   if (!apiKey) {
@@ -209,7 +296,11 @@ async function preflightLiveRun(request: AgentRunRequest, preflightAt: Date) {
     authorization === null ||
     authorization.mode !== "live" ||
     authorization.requestId !== request.requestId ||
-    !authorizationWindowIsValid(authorization.issuedAt, authorization.expiresAt, preflightAt) ||
+    !authorizationWindowIsValid(
+      authorization.issuedAt,
+      authorization.expiresAt,
+      preflightAt,
+    ) ||
     authorization.briefDigest !== digest ||
     authorization.baseRevisionId !== request.brief.sourceRevisionId ||
     authorization.artifactBaseRef !== request.brief.artifactBaseRef ||
@@ -252,9 +343,17 @@ async function preflightLiveRun(request: AgentRunRequest, preflightAt: Date) {
   }
 
   const [gitDirectory, commonDirectory, topLevel] = await Promise.all([
-    git(workspace, ["rev-parse", "--path-format=absolute", "--git-dir"]),
-    git(workspace, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
-    git(workspace, ["rev-parse", "--show-toplevel"]),
+    runPreflightGit(workspace, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-dir",
+    ]),
+    runPreflightGit(workspace, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+    ]),
+    runPreflightGit(workspace, ["rev-parse", "--show-toplevel"]),
   ]);
   if (resolve(topLevel) !== workspace) {
     throw new LiveCodexConfigurationError(
@@ -297,14 +396,14 @@ async function preflightLiveRun(request: AgentRunRequest, preflightAt: Date) {
 
   try {
     const [observedSha, dirtyState, ignoredState] = await Promise.all([
-      git(workspace, ["rev-parse", "HEAD"]),
-      git(workspace, [
+      runPreflightGit(workspace, ["rev-parse", "HEAD"]),
+      runPreflightGit(workspace, [
         "status",
         "--porcelain=v1",
         "--untracked-files=all",
         "--ignore-submodules=none",
       ]),
-      git(workspace, [
+      runPreflightGit(workspace, [
         "status",
         "--ignored",
         "--porcelain=v1",
@@ -364,6 +463,14 @@ async function preflightLiveRun(request: AgentRunRequest, preflightAt: Date) {
       codexHome,
       runId: authorization.runId,
       observedArtifactBaseRef: `git:${observedSha}`,
+      observedCommit: observedSha,
+      repositoryId,
+      targetRef,
+      candidateStoreDirectory,
+      artifactSigning: {
+        keyId: artifactSigningKeyId,
+        secret: artifactSigningSecret,
+      },
       workspaceLease,
     };
   } catch (error) {
@@ -380,169 +487,222 @@ export async function runLiveCodex(
   request: AgentRunRequest,
   options: LiveCodexOptions = {},
 ): Promise<AgentRunSuccess> {
+  assertCodexRequestMode(request, "live");
   const now = options.now ?? (() => new Date());
-  const { apiKey, workspace, codexHome, runId, observedArtifactBaseRef, workspaceLease } =
-    await preflightLiveRun(request, now());
+  const {
+    apiKey,
+    workspace,
+    codexHome,
+    runId,
+    observedArtifactBaseRef,
+    observedCommit,
+    repositoryId,
+    targetRef,
+    candidateStoreDirectory,
+    artifactSigning,
+    workspaceLease,
+  } = await preflightLiveRun(request, now());
 
   try {
-  const startedAt = now().toISOString();
-  const codex = new Codex({ apiKey, env: isolatedEnvironment(codexHome) });
-  const model = process.env.ODEU_CODEX_MODEL?.trim();
-  const thread = codex.startThread({
-    workingDirectory: workspace,
-    sandboxMode: "workspace-write",
-    approvalPolicy: "never",
-    networkAccessEnabled: false,
-    ...(model ? { model } : {}),
-  });
-  const streamed = await thread.runStreamed(compileCodexPrompt(request.brief), {
-    outputSchema: z.toJSONSchema(CodexReportedResultSchema),
-  });
-  const items: ThreadItem[] = [];
-  let finalResponse = "";
-  let receivedRecorded = false;
-  let workingRecorded = false;
-  const lifecycle: AgentLifecycleEvent[] = [
-    {
-      sequence: 0,
-      status: "queued",
-      at: startedAt,
-      label: "Brief queued",
-      detail: "The authorized brief entered the live Codex adapter after preflight checks.",
-    },
-  ];
+    const startedAt = now().toISOString();
+    const codex = new Codex({
+      apiKey,
+      env: isolatedEnvironment(codexHome),
+      config: {
+        shell_environment_policy: isolatedWorkerShellEnvironment(codexHome),
+      },
+    });
+    const model = process.env.ODEU_CODEX_MODEL?.trim();
+    const thread = codex.startThread({
+      workingDirectory: workspace,
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      networkAccessEnabled: false,
+      webSearchMode: "disabled",
+      ...(model ? { model } : {}),
+    });
+    const streamed = await thread.runStreamed(
+      compileCodexPrompt(request.brief),
+      {
+        outputSchema: z.toJSONSchema(CodexReportedResultSchema),
+      },
+    );
+    const items: ThreadItem[] = [];
+    let finalResponse = "";
+    let receivedRecorded = false;
+    let workingRecorded = false;
+    const lifecycle: AgentLifecycleEvent[] = [
+      {
+        sequence: 0,
+        status: "queued",
+        at: startedAt,
+        label: "Brief queued",
+        detail:
+          "The authorized brief entered the live Codex adapter after preflight checks.",
+      },
+    ];
 
-  for await (const event of streamed.events) {
-    if (event.type === "thread.started" && !receivedRecorded) {
-      receivedRecorded = true;
-      lifecycle.push({
-        sequence: lifecycle.length,
-        status: "received",
-        at: now().toISOString(),
-        label: "Brief received",
-        detail: "The Codex SDK reported that the worker thread started.",
-      });
-    } else if (
-      (event.type === "item.started" || event.type === "item.completed") &&
-      !workingRecorded
-    ) {
-      workingRecorded = true;
-      lifecycle.push({
-        sequence: lifecycle.length,
-        status: "working",
-        at: now().toISOString(),
-        label: "Working",
-        detail: "The Codex SDK emitted the first worker item.",
-      });
-    }
-
-    if (event.type === "item.completed") {
-      items.push(event.item);
-      if (event.item.type === "agent_message") {
-        finalResponse = event.item.text;
+    for await (const event of streamed.events) {
+      if (event.type === "thread.started" && !receivedRecorded) {
+        receivedRecorded = true;
+        lifecycle.push({
+          sequence: lifecycle.length,
+          status: "received",
+          at: now().toISOString(),
+          label: "Brief received",
+          detail: "The Codex SDK reported that the worker thread started.",
+        });
+      } else if (
+        (event.type === "item.started" || event.type === "item.completed") &&
+        !workingRecorded
+      ) {
+        workingRecorded = true;
+        lifecycle.push({
+          sequence: lifecycle.length,
+          status: "working",
+          at: now().toISOString(),
+          label: "Working",
+          detail: "The Codex SDK emitted the first worker item.",
+        });
       }
-    } else if (event.type === "turn.failed") {
-      throw new Error(event.error.message);
-    } else if (event.type === "error") {
-      throw new Error(event.message);
+
+      if (event.type === "item.completed") {
+        items.push(event.item);
+        if (event.item.type === "agent_message") {
+          finalResponse = event.item.text;
+        }
+      } else if (event.type === "turn.failed") {
+        throw new Error(event.error.message);
+      } else if (event.type === "error") {
+        throw new Error(event.message);
+      }
     }
-  }
 
-  let reported: z.infer<typeof CodexReportedResultSchema>;
-  try {
-    reported = CodexReportedResultSchema.parse(JSON.parse(finalResponse));
-  } catch (error) {
-    throw new Error(
-      `Codex returned a worker result that failed validation: ${error instanceof Error ? error.message : "unknown error"}`,
-    );
-  }
+    let reported: z.infer<typeof CodexReportedResultSchema>;
+    try {
+      reported = CodexReportedResultSchema.parse(JSON.parse(finalResponse));
+    } catch (error) {
+      throw new Error(
+        `Codex returned a worker result that failed validation: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
+    }
 
-  if (reported.completionClaim.criteriaClaimedSatisfied.length !== request.brief.doneMeans.length) {
-    throw new Error(
-      "Codex returned a completion claim whose criteria count does not match the authorized brief.",
+    if (
+      reported.completionClaim.criteriaClaimedSatisfied.length !==
+      request.brief.doneMeans.length
+    ) {
+      throw new Error(
+        "Codex returned a completion claim whose criteria count does not match the authorized brief.",
+      );
+    }
+    const allowedCheckIds = new Set(
+      request.brief.evidenceContract.requiredChecks.map(
+        (check) => check.checkId,
+      ),
     );
-  }
-  const allowedCheckIds = new Set(
-    request.brief.evidenceContract.requiredChecks.map((check) => check.checkId),
-  );
-  const reportedCheckIds = reported.claimedChecks.map((check) => check.checkId);
-  if (
-    new Set(reportedCheckIds).size !== reportedCheckIds.length ||
-    reportedCheckIds.some((checkId) => !allowedCheckIds.has(checkId)) ||
-    [...allowedCheckIds].some((checkId) => !reportedCheckIds.includes(checkId))
-  ) {
-    throw new Error(
-      "Codex returned check claims that do not correspond one-to-one with the authorized evidence contract.",
+    const reportedCheckIds = reported.claimedChecks.map(
+      (check) => check.checkId,
     );
-  }
+    if (
+      new Set(reportedCheckIds).size !== reportedCheckIds.length ||
+      reportedCheckIds.some((checkId) => !allowedCheckIds.has(checkId)) ||
+      [...allowedCheckIds].some(
+        (checkId) => !reportedCheckIds.includes(checkId),
+      )
+    ) {
+      throw new Error(
+        "Codex returned check claims that do not correspond one-to-one with the authorized evidence contract.",
+      );
+    }
 
-  const sdkObservations = observedSdkEvidence(items);
-  if (reported.outcome === "blocked") {
+    const sdkObservations = observedSdkEvidence(items);
+    const sealReturnedCandidate = async (): Promise<ArtifactCandidateReceipt> =>
+      (
+        await sealLiveWorkspaceCandidate({
+          workspace,
+          repositoryId,
+          targetRef,
+          expectedBaseCommit: observedCommit,
+          runId,
+          briefId: request.brief.briefId,
+          baseRevisionId: request.brief.sourceRevisionId,
+          sealedAt: now().toISOString(),
+          candidateStoreDirectory,
+          signing: artifactSigning,
+        })
+      ).receipt;
+
+    if (reported.outcome === "blocked") {
+      lifecycle.push({
+        sequence: lifecycle.length,
+        status: "blocked",
+        at: now().toISOString(),
+        label: "Worker blocked",
+        detail:
+          "The worker returned a resumable domain state, not a closure. The v0 adapter does not implement thread resume.",
+      });
+      throw new LiveCodexBlockedError(
+        AgentBlockedRunSchema.parse({
+          runId,
+          briefId: request.brief.briefId,
+          sourceRevisionIdUsed: request.brief.sourceRevisionId,
+          artifactBaseRefUsed: observedArtifactBaseRef,
+          workerThreadId: thread.id,
+          workerItemIds: items.map((item) => item.id),
+          events: lifecycle,
+          report: CodexBlockedReportSchema.parse(reported),
+          sdkObservations,
+          artifactCandidate: null,
+        }),
+      );
+    }
+
+    const terminalStatus =
+      reported.outcome === "failed"
+        ? "failed"
+        : reported.outcome === "cancelled"
+          ? "cancelled"
+          : "returned";
     lifecycle.push({
       sequence: lifecycle.length,
-      status: "blocked",
+      status: terminalStatus,
       at: now().toISOString(),
-      label: "Worker blocked",
+      label:
+        terminalStatus === "returned"
+          ? "Result returned"
+          : terminalStatus === "cancelled"
+            ? "Worker cancelled"
+            : "Worker failed",
       detail:
-        "The worker returned a resumable domain state, not a closure. The v0 adapter does not implement thread resume.",
+        "The terminal worker report is staged as claims and SDK observations; canonical worldstate is unchanged.",
     });
-    throw new LiveCodexBlockedError(
-      AgentBlockedRunSchema.parse({
+
+    const artifactCandidate =
+      terminalStatus === "returned" ? await sealReturnedCandidate() : null;
+
+    return AgentRunSuccessSchema.parse({
+      ok: true,
+      runtime: {
+        requestedMode: "live",
+        effectiveMode: "live",
+        status: terminalStatus,
+        provider: "codex",
+        replayIdentity: null,
+        replayKind: null,
+      },
+      events: lifecycle,
+      closure: {
         runId,
         briefId: request.brief.briefId,
         sourceRevisionIdUsed: request.brief.sourceRevisionId,
         artifactBaseRefUsed: observedArtifactBaseRef,
         workerThreadId: thread.id,
         workerItemIds: items.map((item) => item.id),
-        events: lifecycle,
-        report: CodexBlockedReportSchema.parse(reported),
+        report: CodexReportedClosureSchema.parse(reported),
         sdkObservations,
-      }),
-    );
-  }
-
-  const terminalStatus =
-    reported.outcome === "failed"
-        ? "failed"
-        : reported.outcome === "cancelled"
-          ? "cancelled"
-          : "returned";
-  lifecycle.push({
-    sequence: lifecycle.length,
-    status: terminalStatus,
-    at: now().toISOString(),
-    label:
-      terminalStatus === "returned"
-        ? "Result returned"
-        : terminalStatus === "cancelled"
-            ? "Worker cancelled"
-            : "Worker failed",
-    detail:
-      "The terminal worker report is staged as claims and SDK observations; canonical worldstate is unchanged.",
-  });
-
-  return AgentRunSuccessSchema.parse({
-    ok: true,
-    runtime: {
-      requestedMode: "live",
-      effectiveMode: "live",
-      status: terminalStatus,
-      provider: "codex",
-      replayIdentity: null,
-      replayKind: null,
-    },
-    events: lifecycle,
-    closure: {
-      runId,
-      briefId: request.brief.briefId,
-      sourceRevisionIdUsed: request.brief.sourceRevisionId,
-      artifactBaseRefUsed: observedArtifactBaseRef,
-      workerThreadId: thread.id,
-      workerItemIds: items.map((item) => item.id),
-      report: CodexReportedClosureSchema.parse(reported),
-      sdkObservations,
-    },
-  });
+        artifactCandidate,
+      },
+    });
   } finally {
     await workspaceLease.release();
   }

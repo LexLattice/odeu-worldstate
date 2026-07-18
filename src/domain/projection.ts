@@ -1,9 +1,15 @@
 import { KernelError, invariant } from "./errors";
-import { AgentBriefSchema, type AgentBrief, type EvidenceContract } from "./schema";
+import {
+  AgentBriefSchema,
+  type AgentBrief,
+  type EvidenceContract,
+  type EvidenceContractInput,
+} from "./schema";
 import type { WorldstateState } from "./types";
 
 export interface CompileAgentBriefInput {
   readonly id: string;
+  readonly executionMode?: "live" | "replay";
   readonly baseRevisionId: string;
   readonly artifactBaseRef: string;
   readonly targetNodeId: string;
@@ -11,22 +17,29 @@ export interface CompileAgentBriefInput {
   readonly shareNodeIds: readonly string[];
   readonly goal: string;
   readonly doneMeans: readonly string[];
+  readonly unknowns?: readonly string[];
+  readonly constraints?: readonly string[];
+  readonly expectedArtifacts?: readonly string[];
   readonly environment: string;
   readonly agentProfile: string;
   readonly allowedActions: readonly string[];
   readonly deniedActions: readonly string[];
   readonly confirmationRequired?: readonly string[];
-  readonly evidenceContract: EvidenceContract;
+  readonly evidenceContract: EvidenceContractInput;
   readonly escalationPath: string;
 }
 
 export interface AgentBriefPayload {
   readonly id: string;
+  readonly executionMode: "live" | "replay";
   readonly baseRevisionId: string;
   readonly artifactBaseRef: string;
   readonly targetNodeId: string;
   readonly goal: string;
   readonly doneMeans: readonly string[];
+  readonly unknowns: readonly string[];
+  readonly constraints: readonly string[];
+  readonly expectedArtifacts: readonly string[];
   readonly context: {
     readonly nodes: AgentBrief["sharedNodes"];
     readonly relations: AgentBrief["sharedRelations"];
@@ -109,11 +122,15 @@ export function compileAgentBrief(
 
   return AgentBriefSchema.parse({
     id: input.id,
+    executionMode: input.executionMode ?? "replay",
     baseRevisionId: input.baseRevisionId,
     artifactBaseRef: input.artifactBaseRef,
     targetNodeId: input.targetNodeId,
     goal: input.goal,
     doneMeans: input.doneMeans,
+    unknowns: [...(input.unknowns ?? [])],
+    constraints: [...(input.constraints ?? [])],
+    expectedArtifacts: [...(input.expectedArtifacts ?? [])],
     sharedNodes,
     sharedRelations,
     omittedContext,
@@ -134,11 +151,15 @@ export function compileAgentBrief(
 export function projectAgentBrief(brief: AgentBrief): AgentBriefPayload {
   return {
     id: brief.id,
+    executionMode: brief.executionMode,
     baseRevisionId: brief.baseRevisionId,
     artifactBaseRef: brief.artifactBaseRef,
     targetNodeId: brief.targetNodeId,
     goal: brief.goal,
     doneMeans: [...brief.doneMeans],
+    unknowns: [...brief.unknowns],
+    constraints: [...brief.constraints],
+    expectedArtifacts: [...brief.expectedArtifacts],
     context: {
       nodes: brief.sharedNodes,
       relations: brief.sharedRelations,

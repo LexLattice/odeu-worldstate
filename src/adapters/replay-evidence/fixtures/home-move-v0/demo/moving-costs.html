@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Moving-cost comparison</title>
+    <style>
+      :root { color-scheme: light; font-family: system-ui, sans-serif; }
+      body { margin: 0; background: #f4f2ec; color: #17201d; }
+      main { width: min(52rem, calc(100% - 2rem)); margin: 3rem auto; }
+      form { display: grid; gap: 1rem; }
+      fieldset { display: grid; grid-template-columns: 2fr repeat(3, 1fr); gap: .75rem; border: 1px solid #9ca59f; padding: 1rem; }
+      label { display: grid; gap: .35rem; font-weight: 650; }
+      input { min-width: 0; padding: .55rem; font: inherit; }
+      button { justify-self: start; padding: .65rem 1rem; font: inherit; font-weight: 700; }
+      output { display: block; margin-top: 1.25rem; font-size: 1.1rem; }
+      @media (max-width: 42rem) { fieldset { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Compare moving-provider quotes</h1>
+      <p>Enter at least two quotes. Totals include the base quote, distance charge, and additional fees.</p>
+      <form id="quotes">
+        <fieldset class="quote">
+          <label>Provider <input name="provider" value="North Star" required /></label>
+          <label>Base quote <input name="base" type="number" min="0" step="0.01" value="900" required /></label>
+          <label>Distance charge <input name="distance" type="number" min="0" step="0.01" value="120" required /></label>
+          <label>Fees <input name="fees" type="number" min="0" step="0.01" value="80" required /></label>
+        </fieldset>
+        <fieldset class="quote">
+          <label>Provider <input name="provider" value="Blue Cart" required /></label>
+          <label>Base quote <input name="base" type="number" min="0" step="0.01" value="840" required /></label>
+          <label>Distance charge <input name="distance" type="number" min="0" step="0.01" value="190" required /></label>
+          <label>Fees <input name="fees" type="number" min="0" step="0.01" value="40" required /></label>
+        </fieldset>
+        <button type="submit">Compare totals</button>
+      </form>
+      <output id="result" aria-live="polite">Enter two quotes, then compare totals.</output>
+    </main>
+    <script type="module">
+      import { calculateMovingTotalCents } from './moving-costs.mjs';
+
+      document.querySelector('#quotes').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const quotes = [...document.querySelectorAll('.quote')].map((row) => {
+          const inputs = row.querySelectorAll('input');
+          return {
+            provider: inputs[0].value,
+            base: inputs[1].value,
+            distance: inputs[2].value,
+            fees: inputs[3].value,
+          };
+        }).map((quote) => ({ ...quote, total: calculateMovingTotalCents(quote) }));
+        quotes.sort((left, right) => left.total - right.total || left.provider.localeCompare(right.provider));
+        document.querySelector('#result').textContent = quotes
+          .map((quote) => `${quote.provider}: €${(quote.total / 100).toFixed(2)}`)
+          .join(' · ');
+      });
+    </script>
+  </body>
+</html>

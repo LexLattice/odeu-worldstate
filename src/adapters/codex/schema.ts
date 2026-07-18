@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { ArtifactCandidateReceiptSchema } from "@/adapters/artifact-promotion/schema";
+
 const StableId = z.string().trim().min(1).max(160);
 const NonEmptyText = z.string().trim().min(1).max(8_000);
 
@@ -79,11 +81,64 @@ export const RunAuthorizationSchema = z.object({
   capability: z.string().regex(/^[0-9a-f]{64}$/),
 }).strict();
 
-export const AgentRunRequestSchema = z.object({
-  requestId: StableId,
-  brief: AgentBriefSchema,
-  authorization: RunAuthorizationSchema.nullable().default(null),
-});
+export const AgentRunRequestSchema = z
+  .object({
+    runId: StableId,
+    mode: z.enum(["live", "replay"]),
+    requestId: StableId,
+    brief: AgentBriefSchema,
+    authorization: RunAuthorizationSchema.nullable().default(null),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    if (request.authorization !== null && request.mode !== "live") {
+      context.addIssue({
+        code: "custom",
+        path: ["authorization"],
+        message: "live authorization cannot be attached to a replay request",
+      });
+    }
+    if (
+      request.authorization !== null &&
+      request.authorization.runId !== request.runId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["authorization", "runId"],
+        message: "live authorization runId must match the requested runId",
+      });
+    }
+    if (
+      request.authorization !== null &&
+      request.authorization.requestId !== request.requestId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["authorization", "requestId"],
+        message: "live authorization requestId must match the requested requestId",
+      });
+    }
+    if (
+      request.authorization !== null &&
+      request.authorization.baseRevisionId !== request.brief.sourceRevisionId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["authorization", "baseRevisionId"],
+        message: "live authorization revision must match the immutable brief",
+      });
+    }
+    if (
+      request.authorization !== null &&
+      request.authorization.artifactBaseRef !== request.brief.artifactBaseRef
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["authorization", "artifactBaseRef"],
+        message: "live authorization artifact base must match the immutable brief",
+      });
+    }
+  });
 
 export const ArtifactChangeSchema = z.object({
   path: z.string().trim().min(1).max(1_000),
@@ -104,6 +159,7 @@ const CodexReportClaimsSchema = z.object({
   claimedEffects: z.array(NonEmptyText).max(40),
   claimedArtifacts: z.array(ArtifactChangeSchema).max(80),
   claimedChecks: z.array(CheckObservationSchema).max(40),
+  failures: z.array(NonEmptyText).max(40).default([]),
   unresolved: z.array(NonEmptyText).max(40),
   completionClaim: z.object({
     claimedDone: z.boolean(),
@@ -140,19 +196,41 @@ export const SdkCommandObservationSchema = z.object({
   exitCode: z.number().int().nullable(),
 });
 
-export const AgentClosureWitnessSchema = z.object({
-  runId: StableId,
-  briefId: StableId,
-  sourceRevisionIdUsed: StableId,
-  artifactBaseRefUsed: StableId,
-  workerThreadId: StableId.nullable(),
-  workerItemIds: z.array(StableId).max(200),
-  report: CodexReportedClosureSchema,
-  sdkObservations: z.object({
-    fileChanges: z.array(SdkFileObservationSchema).max(500),
-    commands: z.array(SdkCommandObservationSchema).max(200),
-  }),
-});
+export const AgentClosureWitnessSchema = z
+  .object({
+    runId: StableId,
+    briefId: StableId,
+    sourceRevisionIdUsed: StableId,
+    artifactBaseRefUsed: StableId,
+    workerThreadId: StableId.nullable(),
+    workerItemIds: z.array(StableId).max(200),
+    report: CodexReportedClosureSchema,
+    sdkObservations: z.object({
+      fileChanges: z.array(SdkFileObservationSchema).max(500),
+      commands: z.array(SdkCommandObservationSchema).max(200),
+    }),
+    artifactCandidate: ArtifactCandidateReceiptSchema.nullable().default(null),
+  })
+  .superRefine((closure, context) => {
+    const candidate = closure.artifactCandidate?.metadata;
+    if (!candidate) return;
+    const baseCommit = closure.artifactBaseRefUsed.match(
+      /^git:([0-9a-f]{40}|[0-9a-f]{64})$/,
+    )?.[1];
+    if (
+      candidate.runId !== closure.runId ||
+      candidate.briefId !== closure.briefId ||
+      candidate.baseRevisionId !== closure.sourceRevisionIdUsed ||
+      candidate.git.baseCommit !== baseCommit
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["artifactCandidate"],
+        message:
+          "the staged artifact candidate must match the exact run, brief, worldstate revision, and Git base",
+      });
+    }
+  });
 
 export const AgentLifecycleEventSchema = z.object({
   sequence: z.number().int().nonnegative(),
@@ -175,21 +253,84 @@ export const AgentBlockedRunSchema = z.object({
     fileChanges: z.array(SdkFileObservationSchema).max(500),
     commands: z.array(SdkCommandObservationSchema).max(200),
   }),
+  artifactCandidate: z.null().default(null),
 });
 
-export const AgentRunSuccessSchema = z.object({
-  ok: z.literal(true),
-  runtime: z.object({
-    requestedMode: z.enum(["replay", "live"]),
-    effectiveMode: z.enum(["replay", "live"]),
-    status: z.enum(["replayed", "returned", "failed", "cancelled"]),
-    provider: z.literal("codex"),
-    replayIdentity: StableId.nullable(),
-    replayKind: z.enum(["fixture", "recorded"]).nullable(),
-  }),
-  events: z.array(AgentLifecycleEventSchema).min(1),
-  closure: AgentClosureWitnessSchema,
-});
+export const AgentRunSuccessSchema = z
+  .object({
+    ok: z.literal(true),
+    runtime: z.object({
+      requestedMode: z.enum(["replay", "live"]),
+      effectiveMode: z.enum(["replay", "live"]),
+      status: z.enum(["replayed", "returned", "failed", "cancelled"]),
+      provider: z.literal("codex"),
+      replayIdentity: StableId.nullable(),
+      replayKind: z.enum(["fixture", "recorded"]).nullable(),
+    }),
+    events: z.array(AgentLifecycleEventSchema).min(1),
+    closure: AgentClosureWitnessSchema,
+  })
+  .superRefine((response, context) => {
+    const { runtime } = response;
+    if (runtime.requestedMode !== runtime.effectiveMode) {
+      context.addIssue({
+        code: "custom",
+        path: ["runtime", "effectiveMode"],
+        message: "effectiveMode must equal the requested execution mode",
+      });
+    }
+
+    if (runtime.effectiveMode === "replay") {
+      if (
+        runtime.status !== "replayed" ||
+        runtime.replayIdentity === null ||
+        runtime.replayKind === null
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["runtime"],
+          message: "replay responses must retain replay status, identity, and kind",
+        });
+      }
+      if (response.closure.artifactCandidate !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["closure", "artifactCandidate"],
+          message: "replay responses cannot carry a live staged artifact candidate",
+        });
+      }
+    } else if (
+      runtime.status === "replayed" ||
+      runtime.replayIdentity !== null ||
+      runtime.replayKind !== null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["runtime"],
+        message: "live responses cannot claim replay status or identity",
+      });
+    } else if (
+      runtime.status === "returned" &&
+      response.closure.artifactCandidate === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["closure", "artifactCandidate"],
+        message:
+          "a returned live result must carry the exact staged artifact candidate",
+      });
+    } else if (
+      runtime.status !== "returned" &&
+      response.closure.artifactCandidate !== null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["closure", "artifactCandidate"],
+        message:
+          "only a returned live result may carry a staged artifact candidate",
+      });
+    }
+  });
 
 export const AgentRunFailureSchema = z.object({
   ok: z.literal(false),
@@ -205,6 +346,7 @@ export const AgentRunFailureSchema = z.object({
     code: z.enum([
       "invalid_request",
       "invalid_mode",
+      "mode_mismatch",
       "replay_not_applicable",
       "live_not_configured",
       "authorization_invalid",

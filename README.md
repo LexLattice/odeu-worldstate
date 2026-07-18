@@ -19,18 +19,41 @@ conversation or voice input
 ```
 
 The first build target is deliberately narrow: demonstrate one person capturing an
-idea, seeing where it fits, accepting it into a durable worldstate, then eventually
-delegating bounded work to Codex and receiving the result back in the same conceptual
-structure.
+idea, seeing where it fits, accepting it into a durable worldstate, delegating a
+bounded replay or live brief, independently validating the exact returned evidence,
+reconciling the semantic result, and separately deciding whether a reviewed artifact
+candidate becomes authoritative.
 
-> **Project status:** persisted-placement slice. The responsive workbench now wires a
-> typed text source through the fixture `/api/placement` boundary, persists the exact
-> source and bounded request before dispatch, then the manager exchange and pending
-> delta in IndexedDB, and creates one canonical revision only after an explicit human
-> semantic commit. Reload reconstructs the same request, receipt, disposition,
-> revision, and selection from durable state. Agent dispatch and result reconciliation
-> remain visibly unavailable in the workbench; no live model or Codex execution is
-> claimed.
+> **Project status:** durable live-candidate and artifact-promotion boundary. The
+> fixture replay remains the safe default and truthful fallback. When the server-side
+> live runtime is configured, the browser obtains a short-lived signed authorization
+> derived from the current ledger, persists the exact signed attempt before dispatch,
+> and never substitutes replay for a requested live run. A returned live result is
+> lawful only when the execution host seals the worktree changes before releasing its
+> lease, retains the resulting Git commit under a candidate ref, and signs a receipt
+> binding the run, brief, worldstate revision, base commit, target ref, manifest, and
+> binary patch. The candidate is staged evidence, not an authoritative artifact.
+> Independent validation verifies that exact receipt and candidate, mounts only the
+> registered artifact and support blobs read-only, and runs a digest-pinned,
+> server-owned harness in a bounded no-network sandbox. The authored
+> `npm test -- moving-cost` remains a requirement label; candidate package scripts are
+> not executed, and exit zero alone cannot pass. Reconciliation may then record
+> `verificationScope: sealed_live_candidate` and
+> `causalExecutionEstablished: true`, but it still records
+> `causalAuthorshipEstablished: false` and `artifactPromotion: not_performed`.
+> Semantic integration changes the worldstate only. A later exact-origin POST with a
+> transient operator Bearer may advance the configured Git target ref from the exact
+> reviewed base commit to the exact candidate commit with one compare-and-swap. Git
+> ref truth is the raw OID of a direct ref whose object is a commit; a symbolic ref or
+> annotated tag that merely peels to that commit is never accepted as exact. Bearer
+> possession is the server authority; the browser's human-actor event records review
+> and coordination but is not a security credential. Before Git is attempted, the host
+> persists a signed, create-only private intent bound to the candidate, semantic head,
+> ledger version, and SHA-256 digest of the exact authorization prefix. Its digest is
+> chained through the attempt and terminal status. Each create-only journal record is
+> fully written and fsynced in the private directory before atomic installation and a
+> directory fsync. Durable status supports recovery without blindly repeating a
+> possibly completed promotion.
 
 ## Why a worldstate?
 
@@ -57,7 +80,9 @@ The transcript remains inspectable as provenance.
 - Outline, Map, Timeline, and Focus projections derived from the reduced ledger, with
   shared identity, persisted selection, provisional candidate overlays, and
   deterministic projection-only graph layout.
-- Least-context agent briefs that omit private nodes and preserve evidence requirements.
+- A durable, least-context browser brief preview compiled from the latest accepted
+  Task, with shared context, local private/out-of-scope omission receipts, immutable
+  revision and artifact bindings, authority limits, unknowns, and evidence requirements.
 - A deterministic placement fixture plus an opt-in structured-output model gateway.
 - A brief-bound Codex fixture replay plus an opt-in live adapter with signed run
   authorization, short-lived run-scoped single use, an authoritative-ledger check and
@@ -67,15 +92,62 @@ The transcript remains inspectable as provenance.
 - Validated in-memory and IndexedDB ledger stores with full-ledger-version
   compare-and-swap, immutable-history prefix checks, and an explicit atomic project
   replacement used only by the confirmed sandbox reset.
-- A separate Work region that truthfully reports agent execution as unavailable for
-  this slice; accepting placement does not compile a brief, create a run, or stage a
-  closure.
+- A separate Work region with a durable preview boundary, one-run replay/live
+  authority, normalized worker observation, exact claim-versus-SDK-observation
+  inspection, sealed-candidate evidence, independent validation, a provisional
+  reconciliation receipt, and physically separate human semantic-integration and
+  reviewed operator artifact-promotion boundaries.
+- A fixed replay-evidence registry keyed by replay identity and semantic brief digest,
+  with SHA-256-pinned `demo/moving-costs.html` and its imported
+  `demo/moving-costs.mjs`, fixed vectors executed against that exact support module,
+  exact durable verifier attempt/response artifacts, and a kernel validation grounded
+  in their integrity-bound system source. The kernel recomputes the semantic source
+  fingerprint from its content instead of trusting integrity metadata alone. The
+  declared npm command is shown truthfully; the request path runs a bounded
+  `fixture_equivalent` checker rather than executing browser-supplied commands.
+- Failure and recovery behavior for an unobserved gateway outcome, a schema-valid but
+  incoherent response, interrupted reload after a durable attempt, and a concurrent
+  normalization CAS conflict. Invalid transport bodies retain bounded metadata, a
+  capped excerpt, truncation posture, and a full-body digest without rendering the
+  excerpt in the general timeline. Exact response evidence survives independently;
+  reload resumes an interrupted normalization, and repeated CAS recovery retains the
+  response without duplicate dispatch.
+- A deterministic reconciliation compiler that binds the active Task, closure, run,
+  brief, exact validation, worldstate revision, artifact base, Codex exchange, and
+  verifier exchange. It atomically persists an integrity-bound receipt plus pending
+  reconciliation delta with no canonical mutation. The kernel gates that delta on its
+  pinned `validationRef`, rejects stale or artifact-drifted acceptance, and permits
+  reconciliation `delta.accepted` only from an explicit human actor.
+- A server-minted live authorization handoff that validates the current ledger and
+  exact Git base before issuing a short-lived, single-use capability. The exact signed
+  request is durable before live dispatch. A completed private response is recovered
+  without redispatch; only an exact request proven `not_started` may be explicitly
+  retried without a new authority event.
+- A live return contract that requires a signed, content-addressed Git candidate for
+  every returned result. The retained candidate receipt binds the base and candidate
+  commits/trees, changed-path manifest, binary-patch digest, repository identity, and
+  intended target ref without making that target authoritative.
+- An independent live-candidate verifier that rejects replay evidence, verifies the
+  signed candidate and recomputed Git objects, materializes only two registered Git
+  blobs, and evaluates fixed vectors through a nonce- and digest-bound host harness.
+  Its durable evidence records the harness pin, support blob, cases, and truthful
+  per-process isolation limits.
+- A separate artifact-promotion contract. It becomes eligible only after exact live
+  validation and human semantic integration, persists proposal/request/response
+  evidence, requires the exact private completed live response, freshly reruns the
+  host verifier, and permits only an operator-authorized compare-and-swap in a
+  dedicated bare repository. The browser reserves the semantic head only while the
+  promotion is `authorized`, coordinating cooperating sessions; the signed private
+  journal and Git CAS form the server security boundary. Stale, failed, and terminal
+  `outcome_unknown` remain distinct from promoted.
 
-Still to do for the MVP is wiring agent-brief preview, authorization, worker return,
-evidence validation, and result reconciliation into the durable session. The live
-placement and guarded-live Codex adapters must then be exercised and validated with
-their real providers. Voice capture, correction/defer/reject controls, onboarding,
-multi-project routing, and Codex thread resume are not implemented yet.
+The implementation and deterministic adapter evidence for this boundary are verified,
+including real temporary Git repositories and target-ref compare-and-swap behavior.
+An actual external Codex provider run has **not** been observed in this environment
+because neither `OPENAI_API_KEY` nor `CODEX_API_KEY` is configured. Live placement is
+likewise unobserved here. The remaining product work includes provider-backed smoke
+evidence, voice capture, correction/defer/reject controls, onboarding, multi-project
+routing, and Codex thread resume.
 
 ## Example journey
 
@@ -85,10 +157,15 @@ A person says:
 
 Before changing anything, the system proposes a **Where this fits** receipt: the
 project, conceptual location, related goals, dependencies, uncertainty, and possible
-alternatives. The persisted-placement slice stops after the person accepts that
-update. In the intended next stages, a bounded **Agent brief** can be sent to Codex,
-which returns a **Work result** with artifacts and verification evidence for a second
-human decision.
+alternatives. After the person accepts that update, they can persist and inspect a
+bounded **Agent brief**, then separately authorize the displayed replay or live run. A
+live return exposes its exact sealed Git candidate as staged evidence. **Run independent
+validation** checks either the registered replay bundle or that exact live candidate.
+**Prepare reconciliation** saves a reviewable, revision-compatible semantic candidate
+without changing the head. **Integrate reviewed result** creates the next canonical
+worldstate revision but still does not move a file or branch. Only the later **Promote
+reviewed artifact** boundary may, after human review and with transient operator Bearer
+authority, advance the configured target ref to the exact reviewed candidate commit.
 
 ## Design commitments
 
@@ -118,8 +195,9 @@ npm run dev
 ```
 
 The defaults are deliberately safe: the workbench calls the deterministic placement
-fixture and exposes no worker dispatch control. The repository also contains fixture
-and guarded-live Codex adapter contracts, but they are not wired into this UI slice.
+fixture and exposes a separate one-run fixture replay after a durable brief preview.
+Replay never masquerades as live execution and cannot enter the live artifact-promotion
+path.
 Run the full local verification suite with:
 
 ```bash
@@ -127,27 +205,69 @@ npm run verify
 ```
 
 Set `ODEU_MANAGER_MODE=live` only with a server-side `OPENAI_API_KEY`. Live Codex mode
-is a local/container integration surface, not a browser toggle: it requires an
-authorized kernel run, an exact current revision, an exact Git commit, an isolated
-Codex home, a validated current ledger export outside the worker boundary, and normally
-a clean linked worktree with no ignored files. The configured ledger path and its
-parents cannot be symlinks. The adapter reduces queued run state and creates its
-persistent dispatch claim while holding the same per-run guard required by every
-pre-dispatch cancellation or status writer, then leases the worktree for the full
-execution. A blocked run returns evidence without a closure; its domain state is
-resumable, but v0 does not yet implement Codex thread resume. See
-[.env.example](.env.example) for the configuration boundary.
+uses `ODEU_CODEX_MODE=live` and a server-side `OPENAI_API_KEY` or `CODEX_API_KEY`. It
+also requires a clean Git workspace, isolated Codex home, private ledger/authority
+store, run-authorization secret, repository and target-ref identity, retained-candidate
+store, distinct artifact-signing key, server-registered live-evidence repository, and
+durable promotion-status store. Live authority/evidence/promotion routes additionally
+require `ODEU_OPERATOR_BEARER_SECRET` (at least 32 bytes) and an exact
+`ODEU_OPERATOR_ALLOWED_ORIGIN`. Use HTTPS except for an exact loopback development
+origin; privileged browser routes also require
+`Sec-Fetch-Site: same-origin`. Authorization is checked before bodies or private state
+are read and before code execution or ref mutation. The Bearer is possession-based
+operator authority, not proof of a person's identity. The browser sends it only in the
+`Authorization` header from an in-memory provider—never local storage, a request body,
+or a query string.
+Repository/toolchain paths and all other secrets remain on the server; they are never
+accepted from the browser or placed in worker context.
+`ODEU_CODEX_PROMOTION_REPOSITORY` must be the exact, symlink-free root of a dedicated
+bare repository, and the configured target branch must not be checked out in a linked
+worktree. A repository-wide ODEU lock serializes cooperating promotion processes;
+Git's expected-old-value CAS still protects against external writers. Promotion
+authority, attempt, and status files require a native private POSIX journal with strict
+ownership/mode checks and no symlink components; descriptor-anchored journal I/O
+currently assumes Linux `/proc`. Complete records are written and fsynced to a private
+same-directory temporary file, atomically installed without replacement, and followed
+by a directory fsync; readers never adopt a partially filled final record. Retain old
+artifact verification keys for as long as their durable receipts may be recovered. An
+adopted attempt is never executed again, including one adopted after a raced create: a
+crash after the attempt is durable but before its CAS can therefore become terminal
+`outcome_unknown` and require operator reconciliation. Stale repository guards or
+locks likewise require reconciliation rather than deletion and retry. Sandbox reset is
+blocked while a promotion is `authorized` or `outcome_unknown`; a terminal browser
+claim (`promoted`, `stale`, or `failed`) also blocks reset until the read-only status
+boundary re-attests its exact receipt. External/shared document replacement clears
+ephemeral receipt attestation and status must reacquire it. Reset never reverses Git. A
+completed receipt is a historical host observation, not proof of the target ref's
+current value. See
+[.env.example](.env.example) for the complete variable names and safe
+defaults. A blocked run returns evidence without a closure; Codex thread resume remains
+deferred.
 
 ## Development provenance
 
 The v0 foundation was scaffolded and verified on 2026-07-16. On 2026-07-17, the
 home-move source → placement → semantic-commit path was wired through the browser
-ledger and exercised in deterministic fixture mode. The older authored Codex fixture
-`home-move-fixture-replay-v0` remains adapter test material; the workbench does not
-present it as a run. The live placement path targets GPT-5.6 through the OpenAI
-Responses API, but was not exercised without credentials. The guarded live Codex path
-was implemented against the Codex SDK, but has likewise not been claimed as an
-executed end-to-end run.
+ledger and exercised in deterministic fixture mode. The same browser session now
+presents `home-move-fixture-replay-v0` truthfully as a replay after a separately
+persisted brief and one-run authorization. Its independent validator verifies
+separately authored, digest-pinned HTML and the exact support module imported by that
+HTML, then executes fixed vectors against the module; this is fixture verification,
+not a fresh Codex execution or proof of the worker's causal authorship. On 2026-07-18,
+the browser path added an integrity-bound reconciliation receipt, an exact
+validation-pinned pending delta, and a separate human-only integration commit. That
+commit updates semantic worldstate and provenance; it does not promote files or turn
+fixture evidence into causal worker proof.
+The 2026-07-18 live-candidate boundary added the server-minted browser/host authority
+handoff, mandatory signed candidate sealing, independent exact-candidate execution,
+live reconciliation with causal-execution/no-causal-authorship posture, and separate
+reviewed operator target-ref CAS promotion. Its deterministic evidence includes exact
+authorization-prefix binding, the intent/attempt/status chain, and adoption without a
+second CAS. Contract, route, session, and deterministic Git-adapter evidence exercise
+those boundaries. The live placement path targets GPT-5.6 through
+the OpenAI Responses API and the live worker uses the Codex SDK, but no actual external
+provider call has been observed in this environment because `OPENAI_API_KEY` and
+`CODEX_API_KEY` are absent.
 
 Unit, integration, browser-journey, responsive, and automated accessibility checks
 cover the implemented foundation. Passing tests establish contract behavior in this

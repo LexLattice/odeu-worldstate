@@ -12,6 +12,10 @@ import {
   LiveCodexConfigurationError,
   LiveCodexPreflightError,
 } from "./live";
+import {
+  assertCodexRequestMode,
+  CodexRequestModeMismatchError,
+} from "./mode";
 import { CodexReplayNotApplicableError, runCodexReplay } from "./replay";
 import {
   AgentRunFailureSchema,
@@ -34,13 +38,14 @@ function requestedMode(): string {
 
 export async function runCodexAdapter(request: AgentRunRequest): Promise<AgentRunSuccess> {
   const mode = requestedMode();
+  if (mode !== "replay" && mode !== "live") {
+    throw new CodexModeConfigurationError(mode);
+  }
+  assertCodexRequestMode(request, mode);
   if (mode === "replay") {
     return runCodexReplay(request);
   }
-  if (mode === "live") {
-    return runLiveCodex(request);
-  }
-  throw new CodexModeConfigurationError(mode);
+  return runLiveCodex(request);
 }
 
 export function parseAgentRunRequest(input: unknown): AgentRunRequest {
@@ -53,6 +58,7 @@ export function codexFailure(error: unknown): AgentRunFailure {
   const preflightError = error instanceof LiveCodexPreflightError ? error : null;
   const preflightFailure = preflightError !== null;
   const modeFailure = error instanceof CodexModeConfigurationError;
+  const modeMismatch = error instanceof CodexRequestModeMismatchError;
   const replayMismatch = error instanceof CodexReplayNotApplicableError;
   const workerBlocked = error instanceof LiveCodexBlockedError;
   const effectiveMode = mode === "live" || mode === "replay" ? mode : null;
@@ -62,11 +68,17 @@ export function codexFailure(error: unknown): AgentRunFailure {
     runtime: {
       requestedMode: mode,
       effectiveMode:
-        modeFailure || configurationFailure || preflightFailure ? null : effectiveMode,
+        modeFailure || modeMismatch || configurationFailure || preflightFailure
+          ? null
+          : effectiveMode,
       status:
         workerBlocked
           ? "blocked"
-          : modeFailure || configurationFailure || preflightFailure || replayMismatch
+          : modeFailure ||
+              modeMismatch ||
+              configurationFailure ||
+              preflightFailure ||
+              replayMismatch
           ? "unavailable"
           : "failed",
       provider: "codex",
@@ -76,6 +88,8 @@ export function codexFailure(error: unknown): AgentRunFailure {
     error: {
       code: modeFailure
         ? "invalid_mode"
+        : modeMismatch
+          ? "mode_mismatch"
         : preflightFailure
           ? preflightError.code
         : replayMismatch

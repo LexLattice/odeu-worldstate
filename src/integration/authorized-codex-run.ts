@@ -44,6 +44,11 @@ export function authorizedCodexRunRequest(input: {
   if (!brief) {
     throw new Error(`Authorized run ${run.id} references missing brief ${run.briefId}.`);
   }
+  if (brief.executionMode !== "live") {
+    throw new Error(
+      `Brief ${brief.id} is bound to ${brief.executionMode}; it cannot receive live execution authority.`,
+    );
+  }
   if (
     run.baseRevisionId !== brief.baseRevisionId ||
     run.artifactBaseRef !== brief.artifactBaseRef
@@ -56,7 +61,12 @@ export function authorizedCodexRunRequest(input: {
     );
   }
 
-  const request = domainBriefToCodexRunRequest(brief, input.requestId);
+  const request = domainBriefToCodexRunRequest(
+    brief,
+    run.id,
+    "live",
+    input.requestId,
+  );
   const now = input.now ?? new Date();
   const ttl = input.authorizationTtlMs ?? 5 * 60 * 1_000;
   if (!Number.isSafeInteger(ttl) || ttl < 1_000 || ttl > 10 * 60 * 1_000) {

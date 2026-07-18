@@ -55,3 +55,24 @@ export function evidenceValidationEvent(
 ): LedgerEventOf<"evidence.validation_recorded"> {
   return createLedgerEvent({ ...event, type: "evidence.validation_recorded" });
 }
+
+export function artifactPromotionProposedEvent(
+  event: Omit<LedgerEventOf<"artifact.promotion_proposed">, "type">,
+): LedgerEventOf<"artifact.promotion_proposed"> {
+  return createLedgerEvent({ ...event, type: "artifact.promotion_proposed" });
+}
+
+export function artifactPromotionAuthorizedEvent(
+  event: Omit<LedgerEventOf<"artifact.promotion_authorized">, "type">,
+): LedgerEventOf<"artifact.promotion_authorized"> {
+  return createLedgerEvent({ ...event, type: "artifact.promotion_authorized" });
+}
+
+export function artifactPromotionOutcomeRecordedEvent(
+  event: Omit<LedgerEventOf<"artifact.promotion_outcome_recorded">, "type">,
+): LedgerEventOf<"artifact.promotion_outcome_recorded"> {
+  return createLedgerEvent({
+    ...event,
+    type: "artifact.promotion_outcome_recorded",
+  });
+}
