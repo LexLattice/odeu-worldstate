@@ -71,6 +71,12 @@ const SANDBOX_CPU_SOFT_SECONDS = 4;
 const SANDBOX_CPU_HARD_SECONDS = 5;
 const SANDBOX_NODE_OLD_SPACE_MIB = 128;
 const SANDBOX_OUTPUT_BYTES = 65_536;
+const SANDBOX_VISIBLE_SYSTEM_ROOTS = [
+  "/usr",
+  "/bin",
+  "/lib",
+  "/lib64",
+] as const;
 
 const SECRET_FREE_TOOL_ENVIRONMENT = Object.freeze({
   NODE_ENV: "production",
@@ -305,10 +311,6 @@ function containsPath(parent: string, candidate: string): boolean {
 
 async function trustedRegularFile(path: string, label: string): Promise<string> {
   try {
-    const direct = await lstat(path);
-    if (direct.isSymbolicLink() || !direct.isFile()) {
-      throw new Error("not a direct regular file");
-    }
     const resolved = await realpath(path);
     const resolvedStatus = await lstat(resolved);
     if (!resolvedStatus.isFile()) throw new Error("not a regular file");
@@ -317,6 +319,16 @@ async function trustedRegularFile(path: string, label: string): Promise<string> 
     throw new LiveEvidenceUnavailableError(`${label} is unavailable.`, {
       cause: error,
     });
+  }
+}
+
+function assertSandboxVisibleSystemFile(path: string, label: string): void {
+  if (
+    !SANDBOX_VISIBLE_SYSTEM_ROOTS.some((root) => containsPath(root, path))
+  ) {
+    throw new LiveEvidenceUnavailableError(
+      `${label} resolves outside the trusted system roots mounted by the sandbox.`,
+    );
   }
 }
 
@@ -741,12 +753,15 @@ function commandOutput(
 export function liveEvidenceBubblewrapArguments(input: {
   readonly checkoutPath: string;
   readonly harnessFileDescriptor?: number;
+  readonly nodeCommandPath?: string;
+  readonly processLimitCommandPath?: string;
   readonly reportNonce?: string;
   readonly toolchainPath?: string;
 }): readonly string[] {
-  const nodePath = input.toolchainPath
-    ? "/toolchain/bin/node"
-    : "/usr/bin/node";
+  const nodePath =
+    input.nodeCommandPath ??
+    (input.toolchainPath ? "/toolchain/bin/node" : "/usr/bin/node");
+  const processLimitPath = input.processLimitCommandPath ?? "/usr/bin/prlimit";
   const path = input.toolchainPath
     ? "/toolchain/bin:/usr/bin:/bin"
     : "/usr/bin:/bin";
@@ -810,7 +825,7 @@ export function liveEvidenceBubblewrapArguments(input: {
     "--setenv",
     "NO_COLOR",
     "1",
-    "/usr/bin/prlimit",
+    processLimitPath,
     "--core=0:0",
     "--memlock=0:0",
     "--msgqueue=0:0",
@@ -846,11 +861,17 @@ export async function runRegisteredLiveEvidenceCommand(
   const configuredNodePath = input.toolchainPath
     ? join(input.toolchainPath, "bin", "node")
     : "/usr/bin/node";
-  const [, , resolvedNodePath] = await Promise.all([
-    trustedRegularFile("/usr/bin/bwrap", "The bubblewrap runner"),
-    trustedRegularFile("/usr/bin/prlimit", "The process-limit runner"),
-    trustedRegularFile(configuredNodePath, "The trusted Node runner"),
-  ]);
+  const [bubblewrapPath, processLimitPath, resolvedNodePath] =
+    await Promise.all([
+      trustedRegularFile("/usr/bin/bwrap", "The bubblewrap runner"),
+      trustedRegularFile("/usr/bin/prlimit", "The process-limit runner"),
+      trustedRegularFile(configuredNodePath, "The trusted Node runner"),
+    ]);
+  assertSandboxVisibleSystemFile(bubblewrapPath, "The bubblewrap runner");
+  assertSandboxVisibleSystemFile(processLimitPath, "The process-limit runner");
+  if (!input.toolchainPath) {
+    assertSandboxVisibleSystemFile(resolvedNodePath, "The trusted Node runner");
+  }
   if (
     input.toolchainPath &&
     !containsPath(input.toolchainPath, resolvedNodePath)
@@ -859,6 +880,9 @@ export async function runRegisteredLiveEvidenceCommand(
       "The trusted Node runner escapes its registered toolchain root.",
     );
   }
+  const nodeCommandPath = input.toolchainPath
+    ? join("/toolchain", relative(input.toolchainPath, resolvedNodePath))
+    : resolvedNodePath;
   const reportNonce = randomBytes(32).toString("hex");
   const harnessRoot = await mkdtemp(
     join(tmpdir(), "odeu-live-evidence-harness-"),
@@ -879,10 +903,12 @@ export async function runRegisteredLiveEvidenceCommand(
     harness = await open(harnessPath, "r");
     await rm(harnessPath, { force: true });
     result = await spawnBounded({
-      command: "/usr/bin/bwrap",
+      command: bubblewrapPath,
       args: liveEvidenceBubblewrapArguments({
         ...input,
         harnessFileDescriptor: 3,
+        nodeCommandPath,
+        processLimitCommandPath: processLimitPath,
         reportNonce,
       }),
       environment: SECRET_FREE_TOOL_ENVIRONMENT,

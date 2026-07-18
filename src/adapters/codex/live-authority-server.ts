@@ -163,10 +163,48 @@ function containsPath(parent: string, candidate: string): boolean {
   );
 }
 
-async function git(workspace: string, args: string[]): Promise<string> {
-  const result = await execFile("git", ["-C", workspace, ...args], {
-    encoding: "utf8",
-  });
+/** Git probes need PATH and locale only; provider and authority secrets stay outside. */
+function gitProbeEnvironment(
+  serverEnv: Readonly<Record<string, string | undefined>>,
+): NodeJS.ProcessEnv {
+  return {
+    NODE_ENV: "production",
+    PATH: serverEnv.PATH ?? process.env.PATH ?? "/usr/bin:/bin",
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_NO_REPLACE_OBJECTS: "1",
+  };
+}
+
+async function git(
+  workspace: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv,
+): Promise<string> {
+  const result = await execFile(
+    "git",
+    [
+      // Local repository config is still required to resolve worktrees, so
+      // executable helpers are disabled again at highest-precedence CLI scope.
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "credential.helper=",
+      "-C",
+      workspace,
+      ...args,
+    ],
+    {
+      encoding: "utf8",
+      env: environment,
+    },
+  );
   return result.stdout.trim();
 }
 
@@ -218,6 +256,7 @@ async function prepareLiveRuntime(
   }
 
   try {
+    const gitEnvironment = gitProbeEnvironment(env);
     const [workspace, codexHome, ledgerFile] = await Promise.all([
       realpath(resolve(workspaceInput)),
       realpath(resolve(codexHomeInput)),
@@ -235,7 +274,7 @@ async function prepareLiveRuntime(
       throw new Error("runtime paths are not disjoint");
     }
 
-    await git(workspace, ["check-ref-format", targetRef]);
+    await git(workspace, ["check-ref-format", targetRef], gitEnvironment);
     const [
       gitDirectory,
       commonDirectory,
@@ -245,28 +284,44 @@ async function prepareLiveRuntime(
       dirty,
       ignored,
     ] = await Promise.all([
-      git(workspace, ["rev-parse", "--path-format=absolute", "--git-dir"]),
-      git(workspace, [
-        "rev-parse",
-        "--path-format=absolute",
-        "--git-common-dir",
-      ]),
-      git(workspace, ["rev-parse", "--show-toplevel"]),
-      git(workspace, ["rev-parse", "HEAD"]),
-      git(workspace, ["rev-parse", "--verify", `${targetRef}^{commit}`]),
-      git(workspace, [
-        "status",
-        "--porcelain=v1",
-        "--untracked-files=all",
-        "--ignore-submodules=none",
-      ]),
-      git(workspace, [
-        "status",
-        "--ignored",
-        "--porcelain=v1",
-        "--untracked-files=normal",
-        "--ignore-submodules=none",
-      ]),
+      git(
+        workspace,
+        ["rev-parse", "--path-format=absolute", "--git-dir"],
+        gitEnvironment,
+      ),
+      git(
+        workspace,
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        gitEnvironment,
+      ),
+      git(workspace, ["rev-parse", "--show-toplevel"], gitEnvironment),
+      git(workspace, ["rev-parse", "HEAD"], gitEnvironment),
+      git(
+        workspace,
+        ["rev-parse", "--verify", `${targetRef}^{commit}`],
+        gitEnvironment,
+      ),
+      git(
+        workspace,
+        [
+          "status",
+          "--porcelain=v1",
+          "--untracked-files=all",
+          "--ignore-submodules=none",
+        ],
+        gitEnvironment,
+      ),
+      git(
+        workspace,
+        [
+          "status",
+          "--ignored",
+          "--porcelain=v1",
+          "--untracked-files=normal",
+          "--ignore-submodules=none",
+        ],
+        gitEnvironment,
+      ),
     ]);
     if (
       resolve(topLevel) !== workspace ||

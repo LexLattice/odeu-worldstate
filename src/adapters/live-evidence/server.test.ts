@@ -1,4 +1,14 @@
 import { execFile } from "node:child_process";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,9 +49,15 @@ const EMPTY_SHA256 =
   "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 const fixtures: LiveEvidenceGitFixture[] = [];
+const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(fixtures.splice(0).map((fixture) => fixture.cleanup()));
+  await Promise.all([
+    ...fixtures.splice(0).map((fixture) => fixture.cleanup()),
+    ...temporaryDirectories
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true })),
+  ]);
 });
 
 async function fixture(
@@ -100,6 +116,17 @@ function commandObservation(exitCode: number): LiveEvidenceSandboxResult {
     },
   };
   return { observation, passed: exitCode === 0 };
+}
+
+async function symlinkedNodeToolchain(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "odeu-live-evidence-toolchain-"));
+  temporaryDirectories.push(root);
+  const bin = join(root, "bin");
+  await mkdir(bin, { mode: 0o700 });
+  await copyFile("/usr/bin/node", join(bin, "node-real"));
+  await chmod(join(bin, "node-real"), 0o500);
+  await symlink("node-real", join(bin, "node"));
+  return root;
 }
 
 describe("independent live-candidate evidence verifier", { timeout: 15_000 }, () => {
@@ -175,6 +202,49 @@ describe("independent live-candidate evidence verifier", { timeout: 15_000 }, ()
       "moving-cost immutable host harness verified 3 fixed vectors",
     );
   }, 30_000);
+
+  it("canonicalizes and executes an in-toolchain Node symlink", async () => {
+    const created = await fixture();
+    const toolchainPath = await symlinkedNodeToolchain();
+
+    const result = await verifyLiveEvidence(
+      created.request,
+      options(created, {
+        repositories: {
+          [created.receipt.metadata.repositoryId]: {
+            repositoryPath: created.repositoryPath,
+            toolchainPath,
+          },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+  }, 30_000);
+
+  it("rejects a toolchain Node symlink that escapes its registered root", async () => {
+    const created = await fixture();
+    const toolchainPath = await mkdtemp(
+      join(tmpdir(), "odeu-live-evidence-toolchain-"),
+    );
+    temporaryDirectories.push(toolchainPath);
+    await mkdir(join(toolchainPath, "bin"), { mode: 0o700 });
+    await symlink("/usr/bin/node", join(toolchainPath, "bin", "node"));
+
+    await expect(
+      verifyLiveEvidence(
+        created.request,
+        options(created, {
+          repositories: {
+            [created.receipt.metadata.repositoryId]: {
+              repositoryPath: created.repositoryPath,
+              toolchainPath,
+            },
+          },
+        }),
+      ),
+    ).rejects.toThrow(/escapes its registered toolchain root/i);
+  });
 
   it("rejects replay and any browser-authored command or repository path", async () => {
     const created = await fixture();
@@ -501,6 +571,8 @@ describe("independent live-candidate evidence verifier", { timeout: 15_000 }, ()
   it("constructs a read-only host-harness sandbox with explicit process and storage limits", () => {
     const args = liveEvidenceBubblewrapArguments({
       checkoutPath: "/trusted/server/candidate",
+      nodeCommandPath: "/toolchain/bin/node-real",
+      processLimitCommandPath: "/usr/bin/prlimit-real",
       reportNonce: "a".repeat(64),
       toolchainPath: "/trusted/server/toolchain",
     });
@@ -520,7 +592,7 @@ describe("independent live-candidate evidence verifier", { timeout: 15_000 }, ()
         "/trusted/server/toolchain",
         "/candidate",
         "--ro-bind-data",
-        "/usr/bin/prlimit",
+        "/usr/bin/prlimit-real",
         "--core=0:0",
         "--memlock=0:0",
         "--msgqueue=0:0",
@@ -530,7 +602,7 @@ describe("independent live-candidate evidence verifier", { timeout: 15_000 }, ()
         "--fsize=1048576:1048576",
         "--nofile=64:64",
         "--stack=8388608:8388608",
-        "/toolchain/bin/node",
+        "/toolchain/bin/node-real",
         "--experimental-vm-modules",
       ]),
     );

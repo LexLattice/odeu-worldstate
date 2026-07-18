@@ -1,6 +1,8 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  access,
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -60,12 +62,17 @@ interface PreparedFixture {
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(
     temporaryDirectories
       .splice(0)
       .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
 
 function queuedLiveDocument(artifactBaseRef: string): {
   readonly document: WorldstateLedgerDocument;
@@ -338,6 +345,81 @@ function returnedResponse(
 }
 
 describe("live browser-to-server authority handoff", () => {
+  it("runs Git probes without server secrets or configured fsmonitor helpers", async () => {
+    const fixture = await preparedFixture();
+    const fsmonitorMarker = join(fixture.root, "fsmonitor-invoked");
+    const fsmonitor = join(fixture.root, "malicious-fsmonitor.sh");
+    await writeFile(
+      fsmonitor,
+      `#!/bin/sh\nprintf 'invoked\\n' > ${shellQuote(fsmonitorMarker)}\nexit 1\n`,
+      "utf8",
+    );
+    await chmod(fsmonitor, 0o700);
+    await git(fixture.workspace, "config", "core.fsmonitor", fsmonitor);
+
+    const wrapperDirectory = join(fixture.root, "git-wrapper");
+    const probeEnvironmentLog = join(fixture.root, "git-probe-environment");
+    await mkdir(wrapperDirectory);
+    const originalPath = process.env.PATH ?? "/usr/bin:/bin";
+    const wrappedPath = `${wrapperDirectory}:${originalPath}`;
+    const wrapper = join(wrapperDirectory, "git");
+    await writeFile(
+      wrapper,
+      [
+        "#!/bin/sh",
+        `{ printf 'OPENAI_API_KEY=%s\\n' "\${OPENAI_API_KEY-<unset>}";`,
+        `  printf 'CODEX_API_KEY=%s\\n' "\${CODEX_API_KEY-<unset>}";`,
+        `  printf 'ODEU_CODEX_AUTH_SECRET=%s\\n' "\${ODEU_CODEX_AUTH_SECRET-<unset>}";`,
+        `  printf 'ODEU_CODEX_ARTIFACT_SIGNING_SECRET=%s\\n' "\${ODEU_CODEX_ARTIFACT_SIGNING_SECRET-<unset>}";`,
+        `  printf 'GIT_CONFIG_NOSYSTEM=%s\\n' "\${GIT_CONFIG_NOSYSTEM-<unset>}";`,
+        `  printf 'GIT_CONFIG_GLOBAL=%s\\n' "\${GIT_CONFIG_GLOBAL-<unset>}";`,
+        `  printf 'GIT_OPTIONAL_LOCKS=%s\\n' "\${GIT_OPTIONAL_LOCKS-<unset>}";`,
+        `  printf 'ARGS=%s\\n' "$*"; } >> ${shellQuote(probeEnvironmentLog)}`,
+        `PATH=${shellQuote(originalPath)} exec git "$@"`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(wrapper, 0o700);
+
+    vi.stubEnv("PATH", wrappedPath);
+    vi.stubEnv("OPENAI_API_KEY", "process-openai-provider-secret");
+    vi.stubEnv("CODEX_API_KEY", "process-codex-provider-secret");
+    vi.stubEnv("ODEU_CODEX_AUTH_SECRET", "process-live-authority-secret");
+    vi.stubEnv(
+      "ODEU_CODEX_ARTIFACT_SIGNING_SECRET",
+      "process-artifact-signing-secret",
+    );
+
+    await expect(
+      getAgentRuntimeCapability({
+        env: { ...fixture.env, PATH: wrappedPath },
+      }),
+    ).resolves.toMatchObject({
+      effectiveMode: "live",
+      status: "available",
+    });
+
+    const captured = await readFile(probeEnvironmentLog, "utf8");
+    expect(captured).toContain("OPENAI_API_KEY=<unset>");
+    expect(captured).toContain("CODEX_API_KEY=<unset>");
+    expect(captured).toContain("ODEU_CODEX_AUTH_SECRET=<unset>");
+    expect(captured).toContain(
+      "ODEU_CODEX_ARTIFACT_SIGNING_SECRET=<unset>",
+    );
+    expect(captured).not.toContain("process-openai-provider-secret");
+    expect(captured).not.toContain("process-codex-provider-secret");
+    expect(captured).not.toContain("process-live-authority-secret");
+    expect(captured).not.toContain("process-artifact-signing-secret");
+    expect(captured).toContain("GIT_CONFIG_NOSYSTEM=1");
+    expect(captured).toContain("GIT_CONFIG_GLOBAL=/dev/null");
+    expect(captured).toContain("GIT_OPTIONAL_LOCKS=0");
+    expect(captured).toContain("-c core.fsmonitor=false");
+    await expect(access(fsmonitorMarker)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("reports only a safe capability and atomically publishes an exact queued run intent", async () => {
     const fixture = await preparedFixture();
     const options = {

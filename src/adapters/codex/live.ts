@@ -87,6 +87,7 @@ export class LiveCodexBlockedError extends Error {
 
 const MAX_AUTHORIZATION_TTL_MS = 10 * 60 * 1_000;
 const MAX_CLOCK_SKEW_MS = 30 * 1_000;
+const GIT_NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
 
 function containsPath(parent: string, candidate: string): boolean {
   const path = relative(parent, candidate);
@@ -113,10 +114,54 @@ function authorizationWindowIsValid(
   );
 }
 
-async function git(workspace: string, args: string[]): Promise<string> {
-  const result = await execFile("git", ["-C", workspace, ...args], {
-    encoding: "utf8",
-  });
+export function isolatedPreflightGitEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    NODE_ENV: process.env.NODE_ENV ?? "production",
+    PATH: process.env.PATH ?? "",
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: GIT_NULL_DEVICE,
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  for (const name of [
+    "TMP",
+    "TEMP",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+  ]) {
+    const value = process.env[name];
+    if (value) environment[name] = value;
+  }
+  return environment;
+}
+
+export async function runPreflightGit(
+  workspace: string,
+  args: readonly string[],
+): Promise<string> {
+  const result = await execFile(
+    "git",
+    [
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      `core.hooksPath=${GIT_NULL_DEVICE}`,
+      "-c",
+      "credential.helper=",
+      "-C",
+      workspace,
+      ...args,
+    ],
+    {
+      encoding: "utf8",
+      env: isolatedPreflightGitEnvironment(),
+    },
+  );
   return result.stdout.trim();
 }
 
@@ -298,9 +343,17 @@ async function preflightLiveRun(request: AgentRunRequest, preflightAt: Date) {
   }
 
   const [gitDirectory, commonDirectory, topLevel] = await Promise.all([
-    git(workspace, ["rev-parse", "--path-format=absolute", "--git-dir"]),
-    git(workspace, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
-    git(workspace, ["rev-parse", "--show-toplevel"]),
+    runPreflightGit(workspace, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-dir",
+    ]),
+    runPreflightGit(workspace, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+    ]),
+    runPreflightGit(workspace, ["rev-parse", "--show-toplevel"]),
   ]);
   if (resolve(topLevel) !== workspace) {
     throw new LiveCodexConfigurationError(
@@ -343,14 +396,14 @@ async function preflightLiveRun(request: AgentRunRequest, preflightAt: Date) {
 
   try {
     const [observedSha, dirtyState, ignoredState] = await Promise.all([
-      git(workspace, ["rev-parse", "HEAD"]),
-      git(workspace, [
+      runPreflightGit(workspace, ["rev-parse", "HEAD"]),
+      runPreflightGit(workspace, [
         "status",
         "--porcelain=v1",
         "--untracked-files=all",
         "--ignore-submodules=none",
       ]),
-      git(workspace, [
+      runPreflightGit(workspace, [
         "status",
         "--ignored",
         "--porcelain=v1",
