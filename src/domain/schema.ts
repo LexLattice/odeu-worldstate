@@ -164,6 +164,7 @@ export const WorldstateDeltaSchema = z
     visibleConsequence: z.string().trim().min(1),
     supersedesDeltaId: IdentifierSchema.optional(),
     closureRef: IdentifierSchema.optional(),
+    validationRef: IdentifierSchema.optional(),
   })
   .strict()
   .superRefine((delta, context) => {
@@ -174,11 +175,25 @@ export const WorldstateDeltaSchema = z
         message: "A reconciliation delta must name its closure witness.",
       });
     }
+    if (delta.purpose === "reconciliation" && !delta.validationRef) {
+      context.addIssue({
+        code: "custom",
+        path: ["validationRef"],
+        message: "A reconciliation delta must name its exact evidence validation.",
+      });
+    }
     if (delta.purpose !== "reconciliation" && delta.closureRef) {
       context.addIssue({
         code: "custom",
         path: ["closureRef"],
         message: "Only reconciliation deltas may name a closure witness.",
+      });
+    }
+    if (delta.purpose !== "reconciliation" && delta.validationRef) {
+      context.addIssue({
+        code: "custom",
+        path: ["validationRef"],
+        message: "Only reconciliation deltas may name an evidence validation.",
       });
     }
   });
@@ -212,13 +227,14 @@ export const EvidenceRequirementSchema = z
     id: IdentifierSchema,
     label: z.string().trim().min(1),
     kind: z.enum(["test", "artifact", "review", "command", "other"]),
+    command: z.string().trim().min(1).nullable().default(null),
     required: z.boolean(),
   })
   .strict();
 
 export const EvidenceContractSchema = z
   .object({
-    requirements: z.array(EvidenceRequirementSchema),
+    requirements: z.array(EvidenceRequirementSchema).min(1),
     policy: z.object({ blockIntegration: z.boolean() }).strict(),
   })
   .strict()
@@ -247,11 +263,15 @@ export const OmittedContextSchema = z
 export const AgentBriefSchema = z
   .object({
     id: IdentifierSchema,
+    executionMode: z.enum(["live", "replay"]).default("replay"),
     baseRevisionId: IdentifierSchema,
     artifactBaseRef: z.string().trim().min(1),
     targetNodeId: IdentifierSchema,
     goal: z.string().trim().min(1),
     doneMeans: z.array(z.string().trim().min(1)).min(1),
+    unknowns: z.array(z.string().trim().min(1)).default([]),
+    constraints: z.array(z.string().trim().min(1)).default([]),
+    expectedArtifacts: z.array(z.string().trim().min(1)).default([]),
     sharedNodes: z.array(WorldstateNodeSchema),
     sharedRelations: z.array(WorldstateRelationSchema),
     omittedContext: z.array(OmittedContextSchema),
@@ -280,6 +300,7 @@ export const RunLifecycleStatusSchema = z.enum([
   "received",
   "working",
   "blocked",
+  "outcome_unknown",
   "returned",
   "failed",
   "cancelled",
@@ -292,6 +313,16 @@ export const ClosureWitnessSchema = z
     briefId: IdentifierSchema,
     baseRevisionId: IdentifierSchema,
     artifactBaseRef: z.string().trim().min(1),
+    artifactCandidateId: z
+      .string()
+      .regex(/^artifact-candidate:sha256:[0-9a-f]{64}$/)
+      .nullable()
+      .default(null),
+    artifactCandidateCommit: z
+      .string()
+      .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
+      .nullable()
+      .default(null),
     mode: z.enum(["live", "replay"]),
     outcome: z.enum(["returned", "failed", "cancelled"]),
     claimedCompletion: z.boolean(),
@@ -328,11 +359,116 @@ export const EvidenceValidationSchema = z
     closureId: IdentifierSchema,
     briefId: IdentifierSchema,
     baseRevisionId: IdentifierSchema,
+    evidenceSourceId: IdentifierSchema,
     validator: ActorSchema,
     observedAt: TimestampSchema,
     observations: z.array(EvidenceObservationSchema),
   })
   .strict();
+
+const GitObjectIdSchema = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
+const Sha256DigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+const RepoRelativePathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(1_000)
+  .refine(
+    (path) =>
+      !path.startsWith("/") &&
+      !path.includes("\\") &&
+      !path.split("/").some((segment) => segment === "" || segment === "." || segment === ".."),
+    "Artifact paths must be normalized repository-relative paths.",
+  );
+const AuthoritativeGitRefSchema = z
+  .string()
+  .trim()
+  .regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._\/-]*$/)
+  .refine(
+    (ref) =>
+      !ref.includes("..") &&
+      !ref.includes("@{") &&
+      !ref.endsWith("/") &&
+      !ref.endsWith(".") &&
+      !ref.includes("//"),
+    "The authoritative target must be a normalized branch ref.",
+  );
+
+export const ArtifactPromotionProposalSchema = z
+  .object({
+    id: IdentifierSchema,
+    runId: IdentifierSchema,
+    briefId: IdentifierSchema,
+    closureId: IdentifierSchema,
+    validationId: IdentifierSchema,
+    reconciliationDeltaId: IdentifierSchema,
+    integratedRevisionId: IdentifierSchema,
+    artifactBaseRef: z.string().regex(/^git:(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+    repositoryId: IdentifierSchema,
+    targetRef: AuthoritativeGitRefSchema,
+    expectedBaseCommit: GitObjectIdSchema,
+    candidateId: z.string().regex(/^artifact-candidate:sha256:[0-9a-f]{64}$/),
+    candidateCommit: GitObjectIdSchema,
+    candidateTree: GitObjectIdSchema,
+    manifestDigest: Sha256DigestSchema,
+    patchDigest: Sha256DigestSchema,
+    changedPaths: z
+      .array(
+        z
+          .object({
+            path: RepoRelativePathSchema,
+            status: z.enum(["added", "modified", "deleted"]),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(500),
+    candidateEvidenceSourceId: IdentifierSchema,
+    proposalSourceId: IdentifierSchema,
+  })
+  .strict()
+  .superRefine((proposal, context) => {
+    if (proposal.artifactBaseRef !== `git:${proposal.expectedBaseCommit}`) {
+      context.addIssue({
+        code: "custom",
+        path: ["expectedBaseCommit"],
+        message: "The promotion base commit must equal the closure artifact base.",
+      });
+    }
+    const paths = proposal.changedPaths.map((change) => change.path);
+    if (new Set(paths).size !== paths.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["changedPaths"],
+        message: "A staged artifact path may appear only once.",
+      });
+    }
+  });
+
+export const ArtifactPromotionOutcomeSchema = z
+  .object({
+    promotionId: IdentifierSchema,
+    outcome: z.enum(["promoted", "stale", "failed", "outcome_unknown"]),
+    repositoryId: IdentifierSchema,
+    targetRef: AuthoritativeGitRefSchema,
+    expectedBaseCommit: GitObjectIdSchema,
+    candidateCommit: GitObjectIdSchema,
+    observedTargetCommit: GitObjectIdSchema.nullable(),
+    responseSourceId: IdentifierSchema,
+  })
+  .strict()
+  .superRefine((outcome, context) => {
+    if (
+      outcome.outcome === "promoted" &&
+      outcome.observedTargetCommit !== outcome.candidateCommit
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["observedTargetCommit"],
+        message: "A promoted outcome must observe the exact staged candidate commit.",
+      });
+    }
+  });
 
 const EnvelopeShape = {
   eventId: IdentifierSchema,
@@ -487,6 +623,33 @@ export const LedgerEventSchema = z.discriminatedUnion("type", [
       payload: z.object({ validation: EvidenceValidationSchema }).strict(),
     })
     .strict(),
+  z
+    .object({
+      ...EnvelopeShape,
+      type: z.literal("artifact.promotion_proposed"),
+      payload: z.object({ proposal: ArtifactPromotionProposalSchema }).strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...EnvelopeShape,
+      type: z.literal("artifact.promotion_authorized"),
+      payload: z
+        .object({
+          promotionId: IdentifierSchema,
+          integratedRevisionId: IdentifierSchema,
+          requestSourceId: IdentifierSchema,
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...EnvelopeShape,
+      type: z.literal("artifact.promotion_outcome_recorded"),
+      payload: z.object({ outcome: ArtifactPromotionOutcomeSchema }).strict(),
+    })
+    .strict(),
 ]);
 
 export type Actor = z.infer<typeof ActorSchema>;
@@ -507,11 +670,18 @@ export type RevisionRecord = z.infer<typeof RevisionRecordSchema>;
 export type SourceRecord = z.infer<typeof SourceRecordSchema>;
 export type EvidenceRequirement = z.infer<typeof EvidenceRequirementSchema>;
 export type EvidenceContract = z.infer<typeof EvidenceContractSchema>;
+export type EvidenceContractInput = z.input<typeof EvidenceContractSchema>;
 export type AgentBrief = z.infer<typeof AgentBriefSchema>;
 export type AgentRun = z.infer<typeof AgentRunSchema>;
 export type RunLifecycleStatus = z.infer<typeof RunLifecycleStatusSchema>;
 export type ClosureWitness = z.infer<typeof ClosureWitnessSchema>;
 export type EvidenceValidation = z.infer<typeof EvidenceValidationSchema>;
+export type ArtifactPromotionProposal = z.infer<
+  typeof ArtifactPromotionProposalSchema
+>;
+export type ArtifactPromotionOutcome = z.infer<
+  typeof ArtifactPromotionOutcomeSchema
+>;
 export type LedgerEvent = z.infer<typeof LedgerEventSchema>;
 
 export type LedgerEventOf<TType extends LedgerEvent["type"]> = Extract<

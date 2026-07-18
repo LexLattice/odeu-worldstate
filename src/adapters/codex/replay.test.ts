@@ -8,7 +8,12 @@ import { AgentRunSuccessSchema } from "./schema";
 
 function registeredRequest(requestId: string) {
   const fixture = createPrivateProjectionFixture();
-  return domainBriefToCodexRunRequest(fixture.brief, requestId);
+  return domainBriefToCodexRunRequest(
+    fixture.brief,
+    `run-${requestId}`,
+    "replay",
+    requestId,
+  );
 }
 
 describe("runCodexReplay", () => {
@@ -24,6 +29,7 @@ describe("runCodexReplay", () => {
       status: "replayed",
       replayKind: "fixture",
     });
+    expect(first.closure.runId).toBe(request.runId);
     expect(first.events.map((event) => event.status)).toEqual([
       "queued",
       "received",
@@ -51,5 +57,57 @@ describe("runCodexReplay", () => {
         brief: { ...request.brief, goal: "Publish an unrelated website." },
       }),
     ).toThrow(CodexReplayNotApplicableError);
+  });
+
+  it("matches authored semantics across freshly compiled identities", () => {
+    const request = registeredRequest("dynamic-identities");
+    const sharedIds = new Map(
+      request.brief.context.shared.map((item, index) => [
+        item.id,
+        `dynamic-context-${index}`,
+      ]),
+    );
+    const result = runCodexReplay({
+      ...request,
+      runId: "run-dynamically-compiled",
+      brief: {
+        ...request.brief,
+        briefId: "brief-dynamically-compiled",
+        sourceRevisionId: "revision-dynamically-compiled",
+        artifactBaseRef: "git:dynamically-compiled",
+        context: {
+          ...request.brief.context,
+          shared: request.brief.context.shared.map((item) => ({
+            ...item,
+            id: sharedIds.get(item.id) as string,
+          })),
+          relations: request.brief.context.relations.map((relation, index) => ({
+            ...relation,
+            id: `dynamic-relation-${index}`,
+            fromId: sharedIds.get(relation.fromId) as string,
+            toId: sharedIds.get(relation.toId) as string,
+          })),
+        },
+        evidenceContract: {
+          ...request.brief.evidenceContract,
+          requiredChecks: request.brief.evidenceContract.requiredChecks.map(
+            (check, index) => ({ ...check, checkId: `dynamic-check-${index}` }),
+          ),
+        },
+      },
+    });
+
+    expect(result.closure).toMatchObject({
+      runId: "run-dynamically-compiled",
+      briefId: "brief-dynamically-compiled",
+      sourceRevisionIdUsed: "revision-dynamically-compiled",
+      artifactBaseRefUsed: "git:dynamically-compiled",
+    });
+  });
+
+  it("refuses a live request at the replay adapter boundary", () => {
+    expect(() =>
+      runCodexReplay({ ...registeredRequest("wrong-mode"), mode: "live" }),
+    ).toThrow("replay Codex adapter cannot execute a live run request");
   });
 });

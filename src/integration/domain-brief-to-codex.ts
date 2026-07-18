@@ -42,29 +42,32 @@ function sharedKind(kind: NodeKind): SharedKind {
  */
 export function domainBriefToCodexRunRequest(
   brief: DomainAgentBrief,
+  runId: string,
+  mode: "live" | "replay",
   requestId: string,
 ): AgentRunRequest {
+  if (brief.executionMode !== mode) {
+    throw new Error(
+      `Brief ${brief.id} is bound to ${brief.executionMode}; it cannot compile a ${mode} run request.`,
+    );
+  }
   const projected = projectAgentBrief(brief);
   const nonSharedNode = projected.context.nodes.find((node) => node.visibility !== "shared");
   if (nonSharedNode) {
     throw new Error(`Execution projection contains non-shared node ${nonSharedNode.id}.`);
   }
 
-  const unknowns = projected.context.nodes
-    .filter((node) => node.kind === "OpenQuestion")
-    .map((node) => node.description ?? node.title);
-  const constraints = projected.context.nodes
-    .filter((node) => node.kind === "Constraint")
-    .map((node) => node.description ?? node.title);
   return AgentRunRequestSchema.parse({
+    runId,
+    mode,
     requestId,
     authorization: null,
     brief: {
       briefId: brief.id,
       sourceRevisionId: brief.baseRevisionId,
       artifactBaseRef: brief.artifactBaseRef,
-      goal: brief.goal,
-      doneMeans: brief.doneMeans,
+      goal: projected.goal,
+      doneMeans: projected.doneMeans,
       environment: projected.environment,
       agentProfile: projected.agentProfile,
       context: {
@@ -83,25 +86,25 @@ export function domainBriefToCodexRunRequest(
         })),
         omittedCount: brief.omittedContext.length,
       },
-      unknowns,
-      constraints,
+      unknowns: projected.unknowns,
+      constraints: projected.constraints,
       actions: {
-        allowed: brief.allowedActions,
-        denied: brief.deniedActions,
-        confirmationRequired: brief.confirmationRequired,
+        allowed: projected.authority.allowedActions,
+        denied: projected.authority.deniedActions,
+        confirmationRequired: projected.authority.confirmationRequired,
       },
       evidenceContract: {
-        requiredChecks: brief.evidenceContract.requirements.map((requirement) => ({
+        requiredChecks: projected.evidenceContract.requirements.map((requirement) => ({
           checkId: requirement.id,
           label: requirement.label,
           kind: requirement.kind,
-          command: null,
+          command: requirement.command,
           blocking: requirement.required,
         })),
-        expectedArtifacts: [],
-        blockIntegration: brief.evidenceContract.policy.blockIntegration,
+        expectedArtifacts: projected.expectedArtifacts,
+        blockIntegration: projected.evidenceContract.policy.blockIntegration,
       },
-      escalationPath: brief.escalationPath,
+      escalationPath: projected.escalationPath,
     },
   });
 }

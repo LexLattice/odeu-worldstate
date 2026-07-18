@@ -11,6 +11,7 @@ import {
   type LedgerEvent,
   type LedgerEventOf,
   type RevisionRecord,
+  type SourceRecord,
   type WorldstateDelta,
   type WorldstateNode,
   type WorldstateRelation,
@@ -49,6 +50,7 @@ function emptyOperationalProjection(): OperationalProjection {
     closures: {},
     validations: {},
     latestValidationByClosure: {},
+    artifactPromotions: {},
     selectedProjection: "outline",
   };
 }
@@ -106,6 +108,19 @@ function assertSourceRefs(state: WorldstateState, refs: readonly string[]): void
       { sourceId },
     );
   }
+}
+
+function hasValidSemanticIntegrity(source: SourceRecord): boolean {
+  if (source.integrity?.algorithm !== "fnv1a64") return false;
+
+  let semanticContent: unknown;
+  try {
+    semanticContent = JSON.parse(source.content);
+  } catch {
+    return false;
+  }
+
+  return source.integrity.digest === fingerprint(semanticContent);
 }
 
 function deltaSourceRefs(delta: WorldstateDelta): readonly string[] {
@@ -398,6 +413,50 @@ function validateReconciliationReference(state: WorldstateState, delta: Worldsta
     `Reconciliation delta ${delta.id} does not match its closure revision.`,
     { deltaId: delta.id, closureRef: delta.closureRef },
   );
+  const closure = state.operational.closures[delta.closureRef];
+  invariant(
+    closure.outcome === "returned",
+    "evidence_gate_blocked",
+    `Reconciliation delta ${delta.id} requires a returned closure.`,
+    { deltaId: delta.id, closureRef: closure.id, outcome: closure.outcome },
+  );
+  const validation = delta.validationRef
+    ? state.operational.validations[delta.validationRef]
+    : undefined;
+  invariant(
+    validation,
+    "reference_missing",
+    `Reconciliation delta ${delta.id} must reference an evidence validation.`,
+    { deltaId: delta.id, validationRef: delta.validationRef },
+  );
+  invariant(
+    validation.closureId === closure.id &&
+      validation.briefId === closure.briefId &&
+      validation.baseRevisionId === delta.baseRevisionId,
+    "evidence_gate_blocked",
+    `Reconciliation delta ${delta.id} names a validation from another closure lineage.`,
+    {
+      deltaId: delta.id,
+      closureRef: closure.id,
+      validationRef: validation.id,
+    },
+  );
+  invariant(
+    delta.sourceRefs.includes(validation.evidenceSourceId),
+    "evidence_gate_blocked",
+    `Reconciliation delta ${delta.id} must retain its validation evidence source.`,
+    { deltaId: delta.id, evidenceSourceId: validation.evidenceSourceId },
+  );
+  const omittedDurableClosureSource = closure.evidenceRefs.find(
+    (sourceId) =>
+      state.operational.sources[sourceId] && !delta.sourceRefs.includes(sourceId),
+  );
+  invariant(
+    !omittedDurableClosureSource,
+    "evidence_gate_blocked",
+    `Reconciliation delta ${delta.id} omits durable closure evidence.`,
+    { deltaId: delta.id, sourceId: omittedDurableClosureSource },
+  );
 }
 
 function validateBriefProjection(
@@ -546,10 +605,11 @@ function assertDisposition(
 }
 
 const TRANSITIONS: Readonly<Record<RunProjection["status"], readonly RunProjection["status"][]>> = {
-  queued: ["received", "failed", "cancelled"],
-  received: ["working", "blocked", "failed", "cancelled"],
-  working: ["blocked", "returned", "failed", "cancelled"],
-  blocked: ["working", "returned", "failed", "cancelled"],
+  queued: ["received", "outcome_unknown", "failed", "cancelled"],
+  received: ["working", "blocked", "outcome_unknown", "failed", "cancelled"],
+  working: ["blocked", "outcome_unknown", "returned", "failed", "cancelled"],
+  blocked: ["working", "outcome_unknown", "returned", "failed", "cancelled"],
+  outcome_unknown: [],
   returned: [],
   failed: [],
   cancelled: [],
@@ -590,6 +650,18 @@ function assertEvidenceValidationAuthority(
   );
 }
 
+function assertSystemObservationAuthority(
+  actor: LedgerEvent["actor"],
+  eventType: "run.lifecycle_recorded" | "closure.staged",
+): void {
+  invariant(
+    actor.kind === "system",
+    "authority_violation",
+    `${eventType} must be recorded by the trusted orchestration boundary.`,
+    { eventType, actorId: actor.id, actorKind: actor.kind },
+  );
+}
+
 function requiredEvidencePosture(
   state: WorldstateState,
   delta: WorldstateDelta,
@@ -618,8 +690,18 @@ function requiredEvidencePosture(
     reasons.push("artifact_base_mismatch");
   }
 
-  const validationId = state.operational.latestValidationByClosure[closure.id];
-  const validation = validationId ? state.operational.validations[validationId] : undefined;
+  const validation = delta.validationRef
+    ? state.operational.validations[delta.validationRef]
+    : undefined;
+  if (!validation) {
+    reasons.push("validation_missing");
+  } else if (
+    validation.closureId !== closure.id ||
+    validation.briefId !== closure.briefId ||
+    validation.baseRevisionId !== delta.baseRevisionId
+  ) {
+    reasons.push("validation_mismatch");
+  }
   const observations = new Map(
     validation?.observations.map((observation) => [observation.requirementId, observation]),
   );
@@ -656,6 +738,18 @@ function applyEvent(state: WorldstateState, event: LedgerEvent): WorldstateState
   switch (event.type) {
     case "source.captured": {
       const { source } = event.payload;
+      if (source.kind === "system") {
+        invariant(
+          event.actor.kind === "system",
+          "authority_violation",
+          "System evidence sources must be recorded by the trusted orchestration boundary.",
+          {
+            sourceId: source.id,
+            actorId: event.actor.id,
+            actorKind: event.actor.kind,
+          },
+        );
+      }
       invariant(
         !state.operational.sources[source.id],
         "identity_conflict",
@@ -831,6 +925,22 @@ function applyEvent(state: WorldstateState, event: LedgerEvent): WorldstateState
     }
     case "delta.accepted": {
       assertOwnerOrSystemAuthority(event.actor, event.type);
+      const promotionHoldingSemanticHead = Object.values(
+        state.operational.artifactPromotions,
+      ).find(
+        (promotion) => promotion.status === "authorized",
+      );
+      invariant(
+        !promotionHoldingSemanticHead,
+        "revision_conflict",
+        "The semantic head is reserved by an unresolved artifact promotion.",
+        {
+          promotionId: promotionHoldingSemanticHead?.proposal.id,
+          reservedRevisionId:
+            promotionHoldingSemanticHead?.proposal.integratedRevisionId,
+          headRevisionId: state.canonical.head.id,
+        },
+      );
       const projection = state.operational.deltas[event.payload.deltaId];
       invariant(projection, "reference_missing", `Delta ${event.payload.deltaId} does not exist.`);
       assertDisposition(projection, ["pending", "deferred"], event.type);
@@ -861,6 +971,16 @@ function applyEvent(state: WorldstateState, event: LedgerEvent): WorldstateState
         { deltaId: projection.delta.id, reasons: gate.reasons },
       );
       if (projection.delta.purpose === "reconciliation") {
+        invariant(
+          event.actor.kind === "human",
+          "authority_violation",
+          "Reconciliation integration requires explicit human authority.",
+          {
+            deltaId: projection.delta.id,
+            actorId: event.actor.id,
+            actorKind: event.actor.kind,
+          },
+        );
         const closure = state.operational.closures[projection.delta.closureRef!];
         invariant(
           event.payload.artifactBaseRef === closure.artifactBaseRef,
@@ -971,6 +1091,16 @@ function applyEvent(state: WorldstateState, event: LedgerEvent): WorldstateState
         `Run ${run.id} does not match the brief's artifact base.`,
         { runId: run.id },
       );
+      invariant(
+        run.mode === brief.executionMode,
+        "authority_violation",
+        `Run ${run.id} cannot change the immutable brief execution mode.`,
+        {
+          runId: run.id,
+          runMode: run.mode,
+          briefExecutionMode: brief.executionMode,
+        },
+      );
       invariant(!state.operational.runs[run.id], "identity_conflict", `Run ID ${run.id} is already used.`);
       next = {
         ...state,
@@ -985,6 +1115,7 @@ function applyEvent(state: WorldstateState, event: LedgerEvent): WorldstateState
       break;
     }
     case "run.lifecycle_recorded": {
+      assertSystemObservationAuthority(event.actor, event.type);
       const runProjection = state.operational.runs[event.payload.runId];
       invariant(
         runProjection,
@@ -1015,6 +1146,7 @@ function applyEvent(state: WorldstateState, event: LedgerEvent): WorldstateState
       break;
     }
     case "closure.staged": {
+      assertSystemObservationAuthority(event.actor, event.type);
       const { closure } = event.payload;
       const runProjection = state.operational.runs[closure.runId];
       invariant(runProjection, "reference_missing", `Run ${closure.runId} does not exist.`, { runId: closure.runId });
@@ -1075,6 +1207,39 @@ function applyEvent(state: WorldstateState, event: LedgerEvent): WorldstateState
         `Validation ${validation.id} does not match the closure's revision and brief.`,
         { validationId: validation.id },
       );
+      const evidenceSource = state.operational.sources[validation.evidenceSourceId];
+      invariant(
+        evidenceSource,
+        "reference_missing",
+        `Validation ${validation.id} evidence source ${validation.evidenceSourceId} does not exist.`,
+        {
+          validationId: validation.id,
+          evidenceSourceId: validation.evidenceSourceId,
+        },
+      );
+      invariant(
+        evidenceSource.kind === "system" &&
+          evidenceSource.visibility === "shared",
+        "evidence_gate_blocked",
+        `Validation ${validation.id} must be grounded in shared system evidence.`,
+        {
+          validationId: validation.id,
+          evidenceSourceId: validation.evidenceSourceId,
+          sourceKind: evidenceSource.kind,
+          sourceVisibility: evidenceSource.visibility,
+        },
+      );
+      invariant(
+        hasValidSemanticIntegrity(evidenceSource),
+        "evidence_gate_blocked",
+        `Validation ${validation.id} must be grounded in semantically intact fnv1a64 evidence.`,
+        {
+          validationId: validation.id,
+          evidenceSourceId: validation.evidenceSourceId,
+          integrityAlgorithm: evidenceSource.integrity?.algorithm ?? null,
+          integrityDigest: evidenceSource.integrity?.digest ?? null,
+        },
+      );
       invariant(
         !state.operational.validations[validation.id],
         "identity_conflict",
@@ -1091,6 +1256,16 @@ function applyEvent(state: WorldstateState, event: LedgerEvent): WorldstateState
           "reference_missing",
           `Evidence requirement ${observation.requirementId} is not declared by the brief.`,
           { validationId: validation.id, requirementId: observation.requirementId },
+        );
+        invariant(
+          observation.evidenceRefs.includes(validation.evidenceSourceId),
+          "evidence_gate_blocked",
+          `Evidence requirement ${observation.requirementId} is not grounded in validation source ${validation.evidenceSourceId}.`,
+          {
+            validationId: validation.id,
+            requirementId: observation.requirementId,
+            evidenceSourceId: validation.evidenceSourceId,
+          },
         );
         invariant(
           !observed.has(observation.requirementId),
@@ -1111,6 +1286,287 @@ function applyEvent(state: WorldstateState, event: LedgerEvent): WorldstateState
           latestValidationByClosure: {
             ...state.operational.latestValidationByClosure,
             [validation.closureId]: validation.id,
+          },
+        },
+      };
+      break;
+    }
+    case "artifact.promotion_proposed": {
+      invariant(
+        event.actor.kind === "manager",
+        "authority_violation",
+        "Artifact promotion proposals must be compiled by the manager boundary.",
+        { actorId: event.actor.id, actorKind: event.actor.kind },
+      );
+      const { proposal } = event.payload;
+      invariant(
+        !state.operational.artifactPromotions[proposal.id],
+        "identity_conflict",
+        `Artifact promotion ${proposal.id} has already been proposed.`,
+        { promotionId: proposal.id },
+      );
+      const competing = Object.values(
+        state.operational.artifactPromotions,
+      ).find(
+        (candidate) =>
+          candidate.proposal.closureId === proposal.closureId &&
+          candidate.status !== "failed" &&
+          candidate.status !== "stale",
+      );
+      invariant(
+        !competing,
+        "identity_conflict",
+        `Closure ${proposal.closureId} already has active artifact promotion ${competing?.proposal.id}.`,
+        {
+          closureId: proposal.closureId,
+          promotionId: proposal.id,
+          competingPromotionId: competing?.proposal.id,
+        },
+      );
+      const closure = state.operational.closures[proposal.closureId];
+      const runProjection = state.operational.runs[proposal.runId];
+      const brief = state.operational.briefs[proposal.briefId];
+      const validation = state.operational.validations[proposal.validationId];
+      const reconciliation =
+        state.operational.deltas[proposal.reconciliationDeltaId];
+      const candidateSource =
+        state.operational.sources[proposal.candidateEvidenceSourceId];
+      const proposalSource =
+        state.operational.sources[proposal.proposalSourceId];
+      invariant(
+        closure &&
+          closure.outcome === "returned" &&
+          closure.mode === "live" &&
+          closure.runId === proposal.runId &&
+          closure.briefId === proposal.briefId &&
+          closure.artifactBaseRef === proposal.artifactBaseRef &&
+          closure.artifactCandidateId === proposal.candidateId &&
+          closure.artifactCandidateCommit === proposal.candidateCommit,
+        "reference_missing",
+        "Artifact promotion requires the exact returned live closure lineage.",
+        { promotionId: proposal.id, closureId: proposal.closureId },
+      );
+      invariant(
+        runProjection &&
+          runProjection.status === "returned" &&
+          runProjection.run.mode === "live" &&
+          runProjection.run.briefId === proposal.briefId &&
+          runProjection.run.artifactBaseRef === proposal.artifactBaseRef,
+        "lifecycle_conflict",
+        "Artifact promotion requires the exact returned live run.",
+        { promotionId: proposal.id, runId: proposal.runId },
+      );
+      invariant(
+        brief &&
+          brief.executionMode === "live" &&
+          brief.artifactBaseRef === proposal.artifactBaseRef,
+        "reference_missing",
+        "Artifact promotion requires the exact immutable live brief.",
+        { promotionId: proposal.id, briefId: proposal.briefId },
+      );
+      invariant(
+        validation &&
+          validation.closureId === proposal.closureId &&
+          validation.briefId === proposal.briefId,
+        "evidence_gate_blocked",
+        "Artifact promotion requires an independent validation for the exact closure.",
+        { promotionId: proposal.id, validationId: proposal.validationId },
+      );
+      invariant(
+        reconciliation &&
+          reconciliation.disposition === "accepted" &&
+          reconciliation.delta.purpose === "reconciliation" &&
+          reconciliation.delta.closureRef === proposal.closureId &&
+          reconciliation.delta.validationRef === proposal.validationId &&
+          reconciliation.acceptedRevisionId === proposal.integratedRevisionId &&
+          state.provenance.deltaToRevisionId[proposal.reconciliationDeltaId] ===
+            proposal.integratedRevisionId &&
+          state.canonical.head.id === proposal.integratedRevisionId,
+        "evidence_gate_blocked",
+        "Artifact promotion requires the exact accepted reconciliation at the current semantic head.",
+        {
+          promotionId: proposal.id,
+          reconciliationDeltaId: proposal.reconciliationDeltaId,
+          integratedRevisionId: proposal.integratedRevisionId,
+        },
+      );
+      invariant(
+        candidateSource &&
+          candidateSource.kind === "system" &&
+          candidateSource.visibility === "shared" &&
+          hasValidSemanticIntegrity(candidateSource),
+        "evidence_gate_blocked",
+        "Artifact promotion requires an intact, shared staged-candidate source.",
+        {
+          promotionId: proposal.id,
+          sourceId: proposal.candidateEvidenceSourceId,
+        },
+      );
+      invariant(
+        proposalSource &&
+          proposalSource.kind === "system" &&
+          proposalSource.visibility === "shared" &&
+          hasValidSemanticIntegrity(proposalSource),
+        "evidence_gate_blocked",
+        "Artifact promotion requires an intact proposal receipt.",
+        { promotionId: proposal.id, sourceId: proposal.proposalSourceId },
+      );
+      invariant(
+        brief.expectedArtifacts.some((path) =>
+          proposal.changedPaths.some((change) => change.path === path),
+        ),
+        "evidence_gate_blocked",
+        "The staged candidate does not change any artifact declared by the brief.",
+        { promotionId: proposal.id },
+      );
+      next = {
+        ...state,
+        operational: {
+          ...state.operational,
+          artifactPromotions: {
+            ...state.operational.artifactPromotions,
+            [proposal.id]: {
+              proposal,
+              status: "proposed",
+              proposedEventId: event.eventId,
+              outcomeEventIds: [],
+            },
+          },
+        },
+      };
+      break;
+    }
+    case "artifact.promotion_authorized": {
+      invariant(
+        event.actor.kind === "human",
+        "authority_violation",
+        "Only a human may authorize an authoritative artifact promotion.",
+        { actorId: event.actor.id, actorKind: event.actor.kind },
+      );
+      const projection =
+        state.operational.artifactPromotions[event.payload.promotionId];
+      invariant(
+        projection,
+        "reference_missing",
+        `Artifact promotion ${event.payload.promotionId} has not been proposed.`,
+        { promotionId: event.payload.promotionId },
+      );
+      invariant(
+        projection.status === "proposed",
+        "lifecycle_conflict",
+        `Artifact promotion ${event.payload.promotionId} cannot be authorized from ${projection.status}.`,
+        { promotionId: event.payload.promotionId, status: projection.status },
+      );
+      invariant(
+        event.payload.integratedRevisionId ===
+          projection.proposal.integratedRevisionId &&
+          state.canonical.head.id === projection.proposal.integratedRevisionId,
+        "revision_conflict",
+        "Artifact promotion authority is stale against the semantic head.",
+        { promotionId: event.payload.promotionId },
+      );
+      const requestSource =
+        state.operational.sources[event.payload.requestSourceId];
+      invariant(
+        requestSource &&
+          requestSource.kind === "system" &&
+          requestSource.visibility === "shared" &&
+          hasValidSemanticIntegrity(requestSource),
+        "evidence_gate_blocked",
+        "Artifact promotion authority must retain its exact integrity-bound request.",
+        {
+          promotionId: event.payload.promotionId,
+          sourceId: event.payload.requestSourceId,
+        },
+      );
+      next = {
+        ...state,
+        operational: {
+          ...state.operational,
+          artifactPromotions: {
+            ...state.operational.artifactPromotions,
+            [projection.proposal.id]: {
+              ...projection,
+              status: "authorized",
+              authorizedEventId: event.eventId,
+              requestSourceId: event.payload.requestSourceId,
+            },
+          },
+        },
+      };
+      break;
+    }
+    case "artifact.promotion_outcome_recorded": {
+      invariant(
+        event.actor.kind === "system",
+        "authority_violation",
+        "Artifact promotion outcomes must be observed by the trusted system boundary.",
+        { actorId: event.actor.id, actorKind: event.actor.kind },
+      );
+      const { outcome } = event.payload;
+      const projection = state.operational.artifactPromotions[outcome.promotionId];
+      invariant(
+        projection,
+        "reference_missing",
+        `Artifact promotion ${outcome.promotionId} has not been proposed.`,
+        { promotionId: outcome.promotionId },
+      );
+      invariant(
+        projection.status === "authorized" ||
+          projection.status === "outcome_unknown",
+        "lifecycle_conflict",
+        `Artifact promotion ${outcome.promotionId} cannot record an outcome from ${projection.status}.`,
+        { promotionId: outcome.promotionId, status: projection.status },
+      );
+      invariant(
+        state.canonical.head.id === projection.proposal.integratedRevisionId,
+        "revision_conflict",
+        "Artifact promotion outcome evidence is stale against the semantic head.",
+        {
+          promotionId: outcome.promotionId,
+          authorizedRevisionId: projection.proposal.integratedRevisionId,
+          headRevisionId: state.canonical.head.id,
+        },
+      );
+      invariant(
+        outcome.repositoryId === projection.proposal.repositoryId &&
+          outcome.targetRef === projection.proposal.targetRef &&
+          outcome.expectedBaseCommit ===
+            projection.proposal.expectedBaseCommit &&
+          outcome.candidateCommit === projection.proposal.candidateCommit,
+        "artifact_drift",
+        "The artifact promotion outcome does not match the exact reviewed candidate.",
+        { promotionId: outcome.promotionId },
+      );
+      const responseSource =
+        state.operational.sources[outcome.responseSourceId];
+      invariant(
+        responseSource &&
+          responseSource.kind === "system" &&
+          responseSource.visibility === "shared" &&
+          hasValidSemanticIntegrity(responseSource),
+        "evidence_gate_blocked",
+        "Artifact promotion outcome must retain an intact system receipt.",
+        {
+          promotionId: outcome.promotionId,
+          sourceId: outcome.responseSourceId,
+        },
+      );
+      next = {
+        ...state,
+        operational: {
+          ...state.operational,
+          artifactPromotions: {
+            ...state.operational.artifactPromotions,
+            [projection.proposal.id]: {
+              ...projection,
+              status: outcome.outcome,
+              outcomeEventIds: [
+                ...projection.outcomeEventIds,
+                event.eventId,
+              ],
+              latestOutcome: outcome,
+            },
           },
         },
       };

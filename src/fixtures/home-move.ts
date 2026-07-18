@@ -7,11 +7,13 @@ import {
   deltaDispositionEvent,
   deltaProposedEvent,
   evidenceValidationEvent,
+  fingerprint,
   projectAgentBrief,
   reduceWorldstateLedger,
   runAuthorizedEvent,
   runLifecycleEvent,
   sourceCapturedEvent,
+  stableStringify,
   createWorldstateLedger,
   type Actor,
   type AgentBrief,
@@ -640,12 +642,19 @@ export function createStaleProposalFixture(): StaleProposalFixture {
   };
 }
 
-function addBrief(ledger: WorldstateLedger): { ledger: WorldstateLedger; brief: AgentBrief } {
+function addBrief(
+  ledger: WorldstateLedger,
+  input: {
+    readonly executionMode?: "live" | "replay";
+    readonly artifactBaseRef?: string;
+  } = {},
+): { ledger: WorldstateLedger; brief: AgentBrief } {
   const state = reduceWorldstateLedger(ledger);
   const brief = compileAgentBrief(state, {
     id: HOME_MOVE_IDS.brief,
+    executionMode: input.executionMode ?? "replay",
     baseRevisionId: state.canonical.head.id,
-    artifactBaseRef: "git:demo-base-001",
+    artifactBaseRef: input.artifactBaseRef ?? "git:demo-base-001",
     targetNodeId: HOME_MOVE_IDS.compareQuotes,
     shareNodeIds: [
       HOME_MOVE_IDS.projectNode,
@@ -660,6 +669,9 @@ function addBrief(ledger: WorldstateLedger): { ledger: WorldstateLedger; brief: 
       "A user can enter at least two provider quotes and compare totals.",
       "Focused tests for total calculation pass.",
     ],
+    unknowns: ["Recurring storage costs may need a separate comparison."],
+    constraints: [],
+    expectedArtifacts: ["demo/moving-costs.html"],
     environment: "Disposable local demo workspace",
     agentProfile: "Codex, repository-local implementation",
     allowedActions: ["Read and edit files inside the disposable demo workspace", "Run focused tests"],
@@ -671,6 +683,7 @@ function addBrief(ledger: WorldstateLedger): { ledger: WorldstateLedger; brief: 
           id: "requirement-focused-tests",
           label: "Focused moving-cost calculation tests pass",
           kind: "test",
+          command: "npm test -- moving-cost",
           required: true,
         },
         {
@@ -704,9 +717,14 @@ export interface PrivateProjectionFixture extends HomeMoveFixture {
   readonly agentPayload: AgentBriefPayload;
 }
 
-export function createPrivateProjectionFixture(): PrivateProjectionFixture {
+export function createPrivateProjectionFixture(
+  input: {
+    readonly executionMode?: "live" | "replay";
+    readonly artifactBaseRef?: string;
+  } = {},
+): PrivateProjectionFixture {
   const happy = createHappyPlacementFixture();
-  const result = addBrief(happy.ledger);
+  const result = addBrief(happy.ledger, input);
   return {
     ...fixture(result.ledger),
     brief: result.brief,
@@ -724,7 +742,13 @@ function createWorkerFixture(input: {
   evidencePosture: "passing" | "missing";
   staleBeforeClosure?: boolean;
 }): WorkerClosureFixture {
-  const projected = createPrivateProjectionFixture();
+  const projected = createPrivateProjectionFixture({
+    executionMode: input.mode,
+    artifactBaseRef:
+      input.mode === "live"
+        ? `git:${"a".repeat(40)}`
+        : "git:demo-base-001",
+  });
   let ledger = projected.ledger;
   const baseRevisionId = projected.state.canonical.head.id;
   ledger = append(
@@ -751,7 +775,7 @@ function createWorkerFixture(input: {
       eventId: `event-run-received-${input.mode}`,
       commandId: `command-run-received-${input.mode}`,
       occurredAt: T.received,
-      actor: HOME_MOVE_ACTORS.codex,
+      actor: HOME_MOVE_ACTORS.system,
       payload: { runId: HOME_MOVE_IDS.run, status: "received", evidenceRefs: [] },
     }),
   );
@@ -761,7 +785,7 @@ function createWorkerFixture(input: {
       eventId: `event-run-working-${input.mode}`,
       commandId: `command-run-working-${input.mode}`,
       occurredAt: T.working,
-      actor: HOME_MOVE_ACTORS.codex,
+      actor: HOME_MOVE_ACTORS.system,
       payload: { runId: HOME_MOVE_IDS.run, status: "working", evidenceRefs: [] },
     }),
   );
@@ -771,7 +795,7 @@ function createWorkerFixture(input: {
       eventId: `event-run-returned-${input.mode}`,
       commandId: `command-run-returned-${input.mode}`,
       occurredAt: T.returned,
-      actor: HOME_MOVE_ACTORS.codex,
+      actor: HOME_MOVE_ACTORS.system,
       payload: {
         runId: HOME_MOVE_IDS.run,
         status: "returned",
@@ -827,7 +851,7 @@ function createWorkerFixture(input: {
       eventId: `event-closure-staged-${input.mode}`,
       commandId: `command-closure-staged-${input.mode}`,
       occurredAt: T.closure,
-      actor: HOME_MOVE_ACTORS.codex,
+      actor: HOME_MOVE_ACTORS.system,
       payload: {
         closure: {
           id: HOME_MOVE_IDS.closure,
@@ -835,6 +859,12 @@ function createWorkerFixture(input: {
           briefId: HOME_MOVE_IDS.brief,
           baseRevisionId,
           artifactBaseRef: projected.brief.artifactBaseRef,
+          artifactCandidateId:
+            input.mode === "live"
+              ? `artifact-candidate:sha256:${"b".repeat(64)}`
+              : null,
+          artifactCandidateCommit:
+            input.mode === "live" ? "c".repeat(40) : null,
           mode: input.mode,
           outcome: "returned",
           claimedCompletion: true,
@@ -849,41 +879,74 @@ function createWorkerFixture(input: {
     }),
   );
 
-  if (input.evidencePosture === "passing") {
-    ledger = append(
-      ledger,
-      evidenceValidationEvent({
-        eventId: `event-evidence-validated-${input.mode}`,
-        commandId: `command-evidence-validated-${input.mode}`,
-        occurredAt: T.validation,
-        actor: HOME_MOVE_ACTORS.system,
-        payload: {
-          validation: {
-            id: `validation-moving-tool-${input.mode}`,
-            closureId: HOME_MOVE_IDS.closure,
-            briefId: HOME_MOVE_IDS.brief,
-            baseRevisionId,
-            validator: HOME_MOVE_ACTORS.system,
-            observedAt: T.validation,
-            observations: [
-              {
-                requirementId: "requirement-focused-tests",
-                result: "passed",
-                freshness: "current",
-                evidenceRefs: ["evidence:test-output"],
-              },
-              {
-                requirementId: "requirement-artifact-change",
-                result: "passed",
-                freshness: "current",
-                evidenceRefs: ["evidence:artifact-diff"],
-              },
-            ],
+  const evidenceSourceId = `source-evidence-validation-${input.mode}`;
+  const evidenceArtifact = {
+    kind: "odeu.home-move-fixture-evidence-validation",
+    version: 1,
+    closureId: HOME_MOVE_IDS.closure,
+    posture: input.evidencePosture,
+    observations:
+      input.evidencePosture === "passing"
+        ? ["requirement-focused-tests", "requirement-artifact-change"]
+        : [],
+  };
+  ledger = append(
+    ledger,
+    sourceCapturedEvent({
+      eventId: `event-evidence-source-${input.mode}`,
+      commandId: `command-evidence-source-${input.mode}`,
+      occurredAt: T.validation,
+      actor: HOME_MOVE_ACTORS.system,
+      payload: {
+        source: {
+          id: evidenceSourceId,
+          kind: "system",
+          content: stableStringify(evidenceArtifact),
+          visibility: "shared",
+          integrity: {
+            algorithm: "fnv1a64",
+            digest: fingerprint(evidenceArtifact),
           },
         },
-      }),
-    );
-  }
+      },
+    }),
+  );
+  ledger = append(
+    ledger,
+    evidenceValidationEvent({
+      eventId: `event-evidence-validated-${input.mode}`,
+      commandId: `command-evidence-validated-${input.mode}`,
+      occurredAt: T.validation,
+      actor: HOME_MOVE_ACTORS.system,
+      payload: {
+        validation: {
+          id: `validation-moving-tool-${input.mode}`,
+          closureId: HOME_MOVE_IDS.closure,
+          briefId: HOME_MOVE_IDS.brief,
+          baseRevisionId,
+          evidenceSourceId,
+          validator: HOME_MOVE_ACTORS.system,
+          observedAt: T.validation,
+          observations: [
+            {
+              requirementId: "requirement-focused-tests",
+              result:
+                input.evidencePosture === "passing" ? "passed" : "missing",
+              freshness: "current",
+              evidenceRefs: [evidenceSourceId],
+            },
+            {
+              requirementId: "requirement-artifact-change",
+              result:
+                input.evidencePosture === "passing" ? "passed" : "missing",
+              freshness: "current",
+              evidenceRefs: [evidenceSourceId],
+            },
+          ],
+        },
+      },
+    }),
+  );
 
   return {
     ...fixture(ledger),
@@ -907,6 +970,18 @@ export const createStaleClosureFixture = (): WorkerClosureFixture =>
   createWorkerFixture({ mode: "live", evidencePosture: "missing", staleBeforeClosure: true });
 
 function resultReconciliationDelta(state: WorldstateState): WorldstateDelta {
+  const closure = state.operational.closures[HOME_MOVE_IDS.closure];
+  const validationRef =
+    state.operational.latestValidationByClosure[HOME_MOVE_IDS.closure];
+  const validation = validationRef
+    ? state.operational.validations[validationRef]
+    : undefined;
+  if (!closure || !validationRef || !validation) {
+    throw new Error("The result reconciliation fixture requires a closure validation.");
+  }
+  const durableClosureSources = closure.evidenceRefs.filter(
+    (sourceId) => state.operational.sources[sourceId],
+  );
   return {
     id: "delta-integrate-moving-cost-result",
     baseRevisionId: state.canonical.head.id,
@@ -945,12 +1020,17 @@ function resultReconciliationDelta(state: WorldstateState): WorldstateDelta {
       },
     ],
     rationale: ["The returned artifact and required checks support completion and verification."],
-    sourceRefs: [HOME_MOVE_IDS.source],
+    sourceRefs: [
+      HOME_MOVE_IDS.source,
+      validation.evidenceSourceId,
+      ...durableClosureSources,
+    ],
     uncertainty: ["Recurring storage costs remain an open product question."],
     alternatives: ["Leave the returned result staged for later review."],
     conflicts: [],
     visibleConsequence: "The task becomes completed and verified with linked evidence.",
     closureRef: HOME_MOVE_IDS.closure,
+    validationRef,
   };
 }
 

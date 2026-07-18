@@ -1,11 +1,16 @@
-import type { AgentRunRequest, AgentRunSuccess } from "./schema";
-import { executionBriefDigest } from "./integrity";
+import { createHash } from "node:crypto";
+
+import { assertCodexRequestMode } from "./mode";
+import type { AgentBrief, AgentRunRequest, AgentRunSuccess } from "./schema";
 
 const REPLAY_IDENTITY = "home-move-fixture-replay-v0";
 const REPLAY_START = "2026-07-16T09:12:00.000Z";
-const REPLAY_RUN_ID = "fixture-run-home-move-v0";
-const REGISTERED_BRIEF_DIGEST =
-  "sha256:d76166af0d9a93f9a4b8673583b7e168540f464af72ed1e6d1f6ad421d245e5e";
+const REGISTERED_SEMANTIC_BRIEF_DIGESTS = new Set([
+  // The deterministic full-domain fixture compiled by createPrivateProjectionFixture.
+  "sha256:07d4a43af261a69d17a0cd31e992315e69421dccde4d900fc66c1b0d9308c13b",
+  // The accepted browser placement compiled around its dynamic Task identity.
+  "sha256:3d696c21e13931f3e4b3a8122d3439626d14dd3ca229133d314d018608a676ed",
+]);
 
 export class CodexReplayNotApplicableError extends Error {
   constructor() {
@@ -16,16 +21,81 @@ export class CodexReplayNotApplicableError extends Error {
   }
 }
 
+function sorted<T>(items: readonly T[]): T[] {
+  return [...items].sort((left, right) => {
+    const leftJson = JSON.stringify(left);
+    const rightJson = JSON.stringify(right);
+    return leftJson < rightJson ? -1 : leftJson > rightJson ? 1 : 0;
+  });
+}
+
+/**
+ * Fixture applicability is bound to authored meaning, not ledger-generated
+ * identity. Run, brief, context, check, revision, and artifact IDs may all be
+ * freshly compiled without turning an unrelated brief into fixture evidence.
+ */
+export function semanticReplayBriefDigest(brief: AgentBrief): string {
+  const sharedMeaningById = new Map(
+    brief.context.shared.map((item) => [
+      item.id,
+      { kind: item.kind, label: item.label, summary: item.summary },
+    ]),
+  );
+  const semanticBrief = {
+    goal: brief.goal,
+    doneMeans: sorted(brief.doneMeans),
+    environment: brief.environment,
+    agentProfile: brief.agentProfile,
+    context: {
+      shared: sorted([...sharedMeaningById.values()]),
+      relations: sorted(
+        brief.context.relations.map((relation) => ({
+          kind: relation.kind,
+          from: sharedMeaningById.get(relation.fromId) ?? null,
+          to: sharedMeaningById.get(relation.toId) ?? null,
+          label: relation.label,
+        })),
+      ),
+      omittedCount: brief.context.omittedCount,
+    },
+    unknowns: sorted(brief.unknowns),
+    constraints: sorted(brief.constraints),
+    actions: {
+      allowed: sorted(brief.actions.allowed),
+      denied: sorted(brief.actions.denied),
+      confirmationRequired: sorted(brief.actions.confirmationRequired),
+    },
+    evidenceContract: {
+      requiredChecks: sorted(
+        brief.evidenceContract.requiredChecks.map((check) => ({
+          label: check.label,
+          kind: check.kind,
+          command: check.command,
+          blocking: check.blocking,
+        })),
+      ),
+      expectedArtifacts: sorted(brief.evidenceContract.expectedArtifacts),
+      blockIntegration: brief.evidenceContract.blockIntegration,
+    },
+    escalationPath: brief.escalationPath,
+  };
+
+  return `sha256:${createHash("sha256").update(JSON.stringify(semanticBrief)).digest("hex")}`;
+}
+
 function isRegisteredHomeMoveBrief(request: AgentRunRequest): boolean {
-  return executionBriefDigest(request.brief) === REGISTERED_BRIEF_DIGEST;
+  return REGISTERED_SEMANTIC_BRIEF_DIGESTS.has(
+    semanticReplayBriefDigest(request.brief),
+  );
 }
 
 export function runCodexReplay(request: AgentRunRequest): AgentRunSuccess {
+  assertCodexRequestMode(request, "replay");
   if (!isRegisteredHomeMoveBrief(request)) {
     throw new CodexReplayNotApplicableError();
   }
 
-  const { brief } = request;
+  const { brief, runId } = request;
   const evidence = brief.evidenceContract.requiredChecks.map((requirement) => ({
     checkId: requirement.checkId,
     label: requirement.label,
@@ -77,7 +147,7 @@ export function runCodexReplay(request: AgentRunRequest): AgentRunSuccess {
       },
     ],
     closure: {
-      runId: REPLAY_RUN_ID,
+      runId,
       briefId: brief.briefId,
       sourceRevisionIdUsed: brief.sourceRevisionId,
       artifactBaseRefUsed: brief.artifactBaseRef,
@@ -98,6 +168,7 @@ export function runCodexReplay(request: AgentRunRequest): AgentRunSuccess {
           },
         ],
         claimedChecks: evidence,
+        failures: [],
         unresolved: [
           "Confirm whether deposits should be counted as costs or recoverable cash requirements.",
         ],
@@ -109,6 +180,7 @@ export function runCodexReplay(request: AgentRunRequest): AgentRunSuccess {
           "Record the comparison artifact and focused checks as a staged implementation result; preserve the deposit question as open.",
       },
       sdkObservations: { fileChanges: [], commands: [] },
+      artifactCandidate: null,
     },
   };
 }

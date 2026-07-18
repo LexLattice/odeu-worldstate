@@ -12,6 +12,9 @@ const domainBrief = AgentBriefSchema.parse({
   targetNodeId: "task-compare-quotes",
   goal: "Add a moving-cost comparison tool.",
   doneMeans: ["Two provider totals can be compared", "Focused checks pass"],
+  unknowns: ["Compare recurring storage separately?"],
+  constraints: ["Keep the comparison understandable without financial jargon"],
+  expectedArtifacts: ["A runnable moving-cost comparison surface"],
   sharedNodes: [
     {
       id: "task-compare-quotes",
@@ -64,6 +67,7 @@ const domainBrief = AgentBriefSchema.parse({
         id: "check-focused-tests",
         label: "Focused tests pass",
         kind: "test",
+        command: "npm test -- moving-cost",
         required: true,
       },
     ],
@@ -74,17 +78,46 @@ const domainBrief = AgentBriefSchema.parse({
 
 describe("domainBriefToCodexRunRequest", () => {
   it("sends only the execution projection across the server boundary", () => {
-    const request = domainBriefToCodexRunRequest(domainBrief, "request-agent-001");
+    const request = domainBriefToCodexRunRequest(
+      domainBrief,
+      "run-agent-001",
+      "replay",
+      "request-agent-001",
+    );
 
+    expect(request).toMatchObject({
+      runId: "run-agent-001",
+      mode: "replay",
+      requestId: "request-agent-001",
+    });
     expect(request.brief.context.omittedCount).toBe(1);
     expect(JSON.stringify(request)).not.toContain("Household account details");
     expect(request.brief.unknowns).toContain("Compare recurring storage separately?");
     expect(request.brief.evidenceContract.blockIntegration).toBe(true);
     expect(request.brief.evidenceContract.requiredChecks[0]?.kind).toBe("test");
-    expect(request.brief.evidenceContract.expectedArtifacts).toEqual([]);
+    expect(request.brief.evidenceContract.requiredChecks[0]?.command).toBe(
+      "npm test -- moving-cost",
+    );
+    expect(request.brief.constraints).toEqual([
+      "Keep the comparison understandable without financial jargon",
+    ]);
+    expect(request.brief.evidenceContract.expectedArtifacts).toEqual([
+      "A runnable moving-cost comparison surface",
+    ]);
 
     const prompt = compileCodexPrompt(request.brief);
     expect(prompt).not.toContain("Household account details");
     expect(prompt).toContain('"omittedContextCount": 1');
+  });
+
+  it("cannot change the execution mode frozen into the durable brief", () => {
+    expect(() =>
+      domainBriefToCodexRunRequest(
+        domainBrief,
+        "run-agent-live-substitution",
+        "live",
+        "request-agent-live-substitution",
+      ),
+    ).toThrow("bound to replay");
   });
 });

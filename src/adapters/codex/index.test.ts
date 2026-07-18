@@ -2,8 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { codexFailure } from "./index";
+import { createPrivateProjectionFixture } from "@/fixtures";
+import { domainBriefToCodexRunRequest } from "@/integration/domain-brief-to-codex";
+
+import { codexFailure, runCodexAdapter } from "./index";
 import {
+  isolatedEnvironment,
+  isolatedWorkerShellEnvironment,
   LiveCodexBlockedError,
   unsafeIgnoredWorkspaceEntries,
 } from "./live";
@@ -16,6 +21,28 @@ afterEach(() => {
 });
 
 describe("codexFailure", () => {
+  it("refuses to select an adapter whose mode differs from the immutable request", async () => {
+    process.env.ODEU_CODEX_MODE = "replay";
+    const fixture = createPrivateProjectionFixture({
+      executionMode: "live",
+      artifactBaseRef: `git:${"a".repeat(40)}`,
+    });
+    const request = domainBriefToCodexRunRequest(
+      fixture.brief,
+      fixture.ids.run,
+      "live",
+      "request-live-against-replay",
+    );
+
+    await expect(runCodexAdapter(request)).rejects.toThrow(
+      "replay Codex adapter cannot execute a live run request",
+    );
+    expect(codexFailure(await runCodexAdapter(request).catch((error) => error))).toMatchObject({
+      runtime: { requestedMode: "replay", effectiveMode: null },
+      error: { code: "mode_mismatch" },
+    });
+  });
+
   it("maps a worker block to a resumable non-closure response", () => {
     process.env.ODEU_CODEX_MODE = "live";
 
@@ -41,6 +68,7 @@ describe("codexFailure", () => {
           claimedEffects: [],
           claimedArtifacts: [],
           claimedChecks: [],
+          failures: [],
           unresolved: ["Choose whether deposits count as costs."],
           completionClaim: {
             claimedDone: false,
@@ -49,6 +77,7 @@ describe("codexFailure", () => {
           candidateReconciliationSummary: "Keep the run blocked.",
         },
         sdkObservations: { fileChanges: [], commands: [] },
+        artifactCandidate: null,
       }),
     );
 
@@ -82,5 +111,33 @@ describe("codexFailure", () => {
       "debug.log",
       ".next/",
     ]);
+  });
+
+  it("does not inherit server credentials into worker commands", () => {
+    const priorOpenAi = process.env.OPENAI_API_KEY;
+    const priorCodex = process.env.CODEX_API_KEY;
+    process.env.OPENAI_API_KEY = "server-openai-secret";
+    process.env.CODEX_API_KEY = "server-codex-secret";
+    try {
+      const environment = isolatedEnvironment("/private/codex-home");
+      const policy = isolatedWorkerShellEnvironment("/private/codex-home");
+
+      expect(environment).not.toHaveProperty("OPENAI_API_KEY");
+      expect(environment).not.toHaveProperty("CODEX_API_KEY");
+      expect(policy).toMatchObject({
+        inherit: "none",
+        set: {
+          HOME: "/private/codex-home",
+          CODEX_HOME: "/private/codex-home",
+        },
+      });
+      expect(policy.set).not.toHaveProperty("OPENAI_API_KEY");
+      expect(policy.set).not.toHaveProperty("CODEX_API_KEY");
+    } finally {
+      if (priorOpenAi === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = priorOpenAi;
+      if (priorCodex === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorCodex;
+    }
   });
 });
