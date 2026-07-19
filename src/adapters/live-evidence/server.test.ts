@@ -1,11 +1,15 @@
 import { execFile } from "node:child_process";
 import {
+  access,
   chmod,
   copyFile,
+  link,
   mkdir,
   mkdtemp,
+  realpath,
   rm,
   symlink,
+  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -123,8 +127,21 @@ async function symlinkedNodeToolchain(): Promise<string> {
   temporaryDirectories.push(root);
   const bin = join(root, "bin");
   await mkdir(bin, { mode: 0o700 });
-  await copyFile("/usr/bin/node", join(bin, "node-real"));
-  await chmod(join(bin, "node-real"), 0o500);
+  const source = await realpath(process.execPath);
+  const destination = join(bin, "node-real");
+  try {
+    await link(source, destination);
+  } catch (error) {
+    if (
+      !new Set(["EXDEV", "EPERM", "EACCES", "EMLINK"]).has(
+        (error as NodeJS.ErrnoException).code ?? "",
+      )
+    ) {
+      throw error;
+    }
+    await copyFile(source, destination);
+    await chmod(destination, 0o500);
+  }
   await symlink("node-real", join(bin, "node"));
   return root;
 }
@@ -203,6 +220,107 @@ describe("independent live-candidate evidence verifier", { timeout: 15_000 }, ()
     );
   }, 30_000);
 
+  it("verifies a sealed candidate through a linked worktree Git directory", async () => {
+    const created = await fixture();
+    const linkedRoot = await mkdtemp(join(tmpdir(), "odeu-live-evidence-linked-"));
+    temporaryDirectories.push(linkedRoot);
+    const linkedRepositoryPath = join(linkedRoot, "workspace");
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "worktree",
+      "add",
+      "--detach",
+      linkedRepositoryPath,
+      created.candidateCommit,
+    ]);
+
+    const result = await verifyLiveEvidence(
+      created.request,
+      options(created, {
+        repositories: {
+          [created.receipt.metadata.repositoryId]: {
+            repositoryPath: linkedRepositoryPath,
+          },
+        },
+        runSandbox: async () => commandObservation(0),
+      }),
+    );
+
+    expect(result).toMatchObject({ ok: true, status: "passed" });
+  });
+
+  it("fails closed when an existing linked-worktree commondir target disappears", async () => {
+    const created = await fixture();
+    const linkedRoot = await mkdtemp(join(tmpdir(), "odeu-live-evidence-linked-"));
+    temporaryDirectories.push(linkedRoot);
+    const linkedRepositoryPath = join(linkedRoot, "workspace");
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "worktree",
+      "add",
+      "--detach",
+      linkedRepositoryPath,
+      created.candidateCommit,
+    ]);
+    const { stdout: gitDirectoryOutput } = await execFileAsync(
+      "/usr/bin/git",
+      ["-C", linkedRepositoryPath, "rev-parse", "--absolute-git-dir"],
+      { encoding: "utf8" },
+    );
+    await writeFile(
+      join(gitDirectoryOutput.trim(), "commondir"),
+      "missing-common-directory\n",
+      "utf8",
+    );
+    const runSandbox = vi.fn(async () => commandObservation(0));
+
+    await expect(
+      verifyLiveEvidence(
+        created.request,
+        options(created, {
+          repositories: {
+            [created.receipt.metadata.repositoryId]: {
+              repositoryPath: linkedRepositoryPath,
+            },
+          },
+          runSandbox,
+        }),
+      ),
+    ).rejects.toThrow(/configuration could not be located safely/i);
+    expect(runSandbox).not.toHaveBeenCalled();
+  });
+
+  it("verifies a sealed candidate through a registered bare repository", async () => {
+    const created = await fixture();
+    const bareRoot = await mkdtemp(
+      join(tmpdir(), "odeu-live-evidence-bare-"),
+    );
+    temporaryDirectories.push(bareRoot);
+    const bareRepositoryPath = join(bareRoot, "repository.git");
+    await execFileAsync("/usr/bin/git", [
+      "clone",
+      "--mirror",
+      created.repositoryPath,
+      bareRepositoryPath,
+    ]);
+
+    const result = await verifyLiveEvidence(
+      created.request,
+      options(created, {
+        repositories: {
+          [created.receipt.metadata.repositoryId]: {
+            repositoryPath: bareRepositoryPath,
+          },
+        },
+        runSandbox: async () => commandObservation(0),
+      }),
+    );
+
+    expect(result).toMatchObject({ ok: true, status: "passed" });
+  });
+
   it("canonicalizes and executes an in-toolchain Node symlink", async () => {
     const created = await fixture();
     const toolchainPath = await symlinkedNodeToolchain();
@@ -229,7 +347,10 @@ describe("independent live-candidate evidence verifier", { timeout: 15_000 }, ()
     );
     temporaryDirectories.push(toolchainPath);
     await mkdir(join(toolchainPath, "bin"), { mode: 0o700 });
-    await symlink("/usr/bin/node", join(toolchainPath, "bin", "node"));
+    await symlink(
+      await realpath(process.execPath),
+      join(toolchainPath, "bin", "node"),
+    );
 
     await expect(
       verifyLiveEvidence(
@@ -318,6 +439,190 @@ describe("independent live-candidate evidence verifier", { timeout: 15_000 }, ()
       ok: false,
       error: { code: "verification_failed" },
     });
+  });
+
+  it.each(["local", "worktree"] as const)(
+    "rejects a %s repository include before observing candidate objects",
+    async (scope) => {
+      const created = await fixture();
+      const runSandbox = vi.fn(async () => commandObservation(0));
+      const includedConfig = join(
+        created.repositoryPath,
+        ".git",
+        `odeu-${scope}-included.config`,
+      );
+      await writeFile(includedConfig, "[malformed\n", "utf8");
+      if (scope === "worktree") {
+        await execFileAsync("/usr/bin/git", [
+          "-C",
+          created.repositoryPath,
+          "config",
+          "extensions.worktreeConfig",
+          "true",
+        ]);
+      }
+      await execFileAsync("/usr/bin/git", [
+        "-C",
+        created.repositoryPath,
+        "config",
+        `--${scope}`,
+        "include.path",
+        includedConfig,
+      ]);
+
+      await expect(
+        verifyLiveEvidence(
+          created.request,
+          options(created, { runSandbox }),
+        ),
+      ).rejects.toThrow(/unsafe includes or partial-clone helpers/i);
+      expect(runSandbox).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects repository-controlled partial-clone upload-pack before it can execute", async () => {
+    const created = await fixture();
+    const runSandbox = vi.fn(async () => commandObservation(0));
+    const marker = join(created.repositoryPath, "upload-pack-invoked");
+    const uploadPack = join(
+      created.repositoryPath,
+      ".git",
+      "untrusted-upload-pack.sh",
+    );
+    await writeFile(
+      uploadPack,
+      [
+        "#!/bin/sh",
+        `printf 'invoked\\n' > ${JSON.stringify(marker)}`,
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "config",
+      "remote.untrusted.promisor",
+      "true",
+    ]);
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "config",
+      "remote.untrusted.partialCloneFilter",
+      "blob:none",
+    ]);
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "config",
+      "remote.untrusted.uploadPack",
+      uploadPack,
+    ]);
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "config",
+      "remote.untrusted.url",
+      created.repositoryPath,
+    ]);
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "config",
+      "core.repositoryFormatVersion",
+      "1",
+    ]);
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "config",
+      "extensions.partialClone",
+      "untrusted",
+    ]);
+
+    await expect(
+      verifyLiveEvidence(
+        created.request,
+        options(created, { runSandbox }),
+      ),
+    ).rejects.toThrow(/unsafe includes or partial-clone helpers/i);
+    expect(runSandbox).not.toHaveBeenCalled();
+    await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects an annotated-tag candidate ref even when it peels to the signed commit", async () => {
+    const created = await fixture();
+    const runSandbox = vi.fn(async () => commandObservation(0));
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "tag",
+      "-a",
+      "candidate-ref-indirection",
+      "-m",
+      "candidate ref indirection",
+      created.candidateCommit,
+    ]);
+    const { stdout: tagObjectOutput } = await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "rev-parse",
+      "refs/tags/candidate-ref-indirection",
+    ]);
+    const tagObject = tagObjectOutput.trim();
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "update-ref",
+      "--no-deref",
+      created.receipt.metadata.candidateRef,
+      tagObject,
+      created.candidateCommit,
+    ]);
+    const { stdout: peeledOutput } = await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "rev-parse",
+      `${created.receipt.metadata.candidateRef}^{commit}`,
+    ]);
+    expect(peeledOutput.trim()).toBe(created.candidateCommit);
+
+    await expect(
+      verifyLiveEvidence(
+        created.request,
+        options(created, { runSandbox }),
+      ),
+    ).rejects.toThrow(/directly to a commit object without tag peeling/i);
+    expect(runSandbox).not.toHaveBeenCalled();
+  });
+
+  it("rejects a symbolic candidate ref even when it resolves to the signed commit", async () => {
+    const created = await fixture();
+    const runSandbox = vi.fn(async () => commandObservation(0));
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "symbolic-ref",
+      created.receipt.metadata.candidateRef,
+      "refs/heads/candidate",
+    ]);
+    const { stdout: peeledOutput } = await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "rev-parse",
+      `${created.receipt.metadata.candidateRef}^{commit}`,
+    ]);
+    expect(peeledOutput.trim()).toBe(created.candidateCommit);
+
+    await expect(
+      verifyLiveEvidence(
+        created.request,
+        options(created, { runSandbox }),
+      ),
+    ).rejects.toThrow(/direct Git ref, not a symbolic ref/i);
+    expect(runSandbox).not.toHaveBeenCalled();
   });
 
   it(

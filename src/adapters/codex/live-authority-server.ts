@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   access,
   link,
+  lstat,
   mkdir,
   open,
   readFile,
@@ -12,7 +13,7 @@ import {
   rename,
   unlink,
 } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 
@@ -50,6 +51,9 @@ import {
 } from "./schema";
 
 const execFile = promisify(execFileCallback);
+const GIT_NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
+const GIT_CONFIG_SCAN_CWD =
+  process.platform === "win32" ? (process.env.SYSTEMROOT ?? "C:\\") : "/";
 
 export type LiveAuthorityServerErrorCode =
   | "live_not_configured"
@@ -173,10 +177,16 @@ function gitProbeEnvironment(
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_GLOBAL: GIT_NULL_DEVICE,
     GIT_TERMINAL_PROMPT: "0",
     GIT_OPTIONAL_LOCKS: "0",
     GIT_NO_REPLACE_OBJECTS: "1",
+    // These probes are local-only. A promisor repository must fail closed
+    // instead of invoking a repository-selected transport or upload-pack
+    // helper to lazily obtain an object.
+    GIT_ALLOW_PROTOCOL: "",
+    GIT_PROTOCOL_FROM_USER: "0",
+    GIT_NO_LAZY_FETCH: "1",
   };
 }
 
@@ -193,7 +203,7 @@ async function git(
       "-c",
       "core.fsmonitor=false",
       "-c",
-      "core.hooksPath=/dev/null",
+      `core.hooksPath=${GIT_NULL_DEVICE}`,
       "-c",
       "credential.helper=",
       "-C",
@@ -206,6 +216,183 @@ async function git(
     },
   );
   return result.stdout.trim();
+}
+
+const EXECUTABLE_FILTER_CONFIG = /^filter\..+\.(?:clean|smudge|process)$/i;
+const PARTIAL_CLONE_HELPER_CONFIG =
+  /^(?:extensions\.partialclone|remote\..+\.(?:promisor|partialclonefilter|uploadpack))$/i;
+const CONFIG_INCLUDE = /^(?:include\.path|includeif\..+\.path)$/i;
+
+async function assertNoRepositoryExecutableGitHelpers(
+  workspace: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<void> {
+  const configuredNames = (
+    await Promise.all(
+      (await repositoryGitConfigurationFiles(workspace)).map(
+        async (configurationFile) => {
+          let configurationFileStatus;
+          try {
+            configurationFileStatus = await lstat(configurationFile);
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              "code" in error &&
+              error.code === "ENOENT"
+            ) {
+              return "";
+            }
+            throw error;
+          }
+          if (!configurationFileStatus.isFile()) {
+            throw new Error(
+              "repository Git configuration must be a regular file",
+            );
+          }
+          // Run the config builtin outside repository discovery. `git -C
+          // <workspace> config --no-includes` can parse an include while Git
+          // discovers the repository, before the builtin applies that option.
+          const result = await execFile(
+            "git",
+            [
+              "config",
+              "--file",
+              configurationFile,
+              "--no-includes",
+              "--null",
+              "--name-only",
+              "--list",
+            ],
+            {
+              cwd: GIT_CONFIG_SCAN_CWD,
+              encoding: "utf8",
+              env: environment,
+            },
+          );
+          return result.stdout;
+        },
+      ),
+    )
+  )
+    .join("")
+    .split("\0")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (
+    configuredNames.some(
+      (name) =>
+        CONFIG_INCLUDE.test(name) ||
+        EXECUTABLE_FILTER_CONFIG.test(name) ||
+        PARTIAL_CLONE_HELPER_CONFIG.test(name),
+    )
+  ) {
+    throw new Error("repository-controlled Git helper is not allowed");
+  }
+}
+
+async function repositoryGitConfigurationFiles(
+  workspace: string,
+): Promise<readonly string[]> {
+  const dotGitPath = resolve(workspace, ".git");
+  const dotGitStatus = await lstat(dotGitPath);
+  let gitDirectory: string;
+  if (dotGitStatus.isDirectory()) {
+    gitDirectory = await realpath(dotGitPath);
+  } else if (dotGitStatus.isFile()) {
+    const pointer = await readFile(dotGitPath, "utf8");
+    const match = /^gitdir: ([^\0\r\n]+)\r?\n?$/.exec(pointer);
+    if (!match) {
+      throw new Error("worktree Git directory pointer is malformed");
+    }
+    gitDirectory = await realpath(resolve(dirname(dotGitPath), match[1]));
+  } else {
+    throw new Error("workspace .git entry is not a regular directory or file");
+  }
+
+  let commonDirectory = gitDirectory;
+  const pointerPath = join(gitDirectory, "commondir");
+  let pointerStatus;
+  try {
+    pointerStatus = await lstat(pointerPath);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return [
+        join(commonDirectory, "config"),
+        join(gitDirectory, "config.worktree"),
+      ];
+    }
+    throw error;
+  }
+  if (!pointerStatus.isFile()) {
+    throw new Error("Git common-directory pointer is not a regular file");
+  }
+  const pointer = await readFile(pointerPath, "utf8");
+  const value = pointer.replace(/\r?\n$/, "");
+  if (!value || /[\0\r\n]/.test(value)) {
+    throw new Error("Git common-directory pointer is malformed");
+  }
+  commonDirectory = await realpath(resolve(gitDirectory, value));
+
+  return [
+    join(commonDirectory, "config"),
+    join(gitDirectory, "config.worktree"),
+  ];
+}
+
+interface DirectCommitRef {
+  readonly objectId: string;
+}
+
+async function resolveDirectCommitRef(
+  workspace: string,
+  targetRef: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<DirectCommitRef> {
+  const fields = (
+    await git(
+      workspace,
+      [
+        "for-each-ref",
+        "--format=%(refname)%00%(symref)%00%(objecttype)%00%(objectname)",
+        "--",
+        targetRef,
+      ],
+      environment,
+    )
+  ).split("\0");
+  const [refName, symbolicTarget, objectType, objectId] = fields;
+  if (
+    fields.length !== 4 ||
+    refName !== targetRef ||
+    symbolicTarget !== "" ||
+    objectType !== "commit" ||
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(objectId)
+  ) {
+    throw new Error("promotion target is not a direct commit ref");
+  }
+  return { objectId };
+}
+
+async function assertNoIndexGitlinks(
+  workspace: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<void> {
+  const entries = (
+    await git(workspace, ["ls-files", "--stage", "-z"], environment)
+  )
+    .split("\0")
+    .filter(Boolean);
+  if (
+    entries.some((entry) =>
+      /^160000 (?:[0-9a-f]{40}|[0-9a-f]{64}) [0-3]\t/.test(entry),
+    )
+  ) {
+    throw new Error("Git submodules are not allowed in the live workspace");
+  }
 }
 
 function unsafeIgnoredWorkspaceEntries(status: string): string[] {
@@ -274,13 +461,19 @@ async function prepareLiveRuntime(
       throw new Error("runtime paths are not disjoint");
     }
 
+    await assertNoRepositoryExecutableGitHelpers(workspace, gitEnvironment);
     await git(workspace, ["check-ref-format", targetRef], gitEnvironment);
+    const target = await resolveDirectCommitRef(
+      workspace,
+      targetRef,
+      gitEnvironment,
+    );
+    await assertNoIndexGitlinks(workspace, gitEnvironment);
     const [
       gitDirectory,
       commonDirectory,
       topLevel,
       head,
-      targetCommit,
       dirty,
       ignored,
     ] = await Promise.all([
@@ -296,11 +489,6 @@ async function prepareLiveRuntime(
       ),
       git(workspace, ["rev-parse", "--show-toplevel"], gitEnvironment),
       git(workspace, ["rev-parse", "HEAD"], gitEnvironment),
-      git(
-        workspace,
-        ["rev-parse", "--verify", `${targetRef}^{commit}`],
-        gitEnvironment,
-      ),
       git(
         workspace,
         [
@@ -330,7 +518,7 @@ async function prepareLiveRuntime(
       (resolve(gitDirectory) === resolve(commonDirectory) &&
         env.ODEU_CODEX_ALLOW_PRIMARY_WORKTREE !== "true") ||
       !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head) ||
-      targetCommit !== head ||
+      target.objectId !== head ||
       dirty.length > 0 ||
       unsafeIgnoredWorkspaceEntries(ignored).length > 0
     ) {

@@ -7,11 +7,12 @@ import {
   mkdir,
   mkdtemp,
   open,
+  readFile,
   realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 import type {
@@ -61,6 +62,7 @@ const MAX_CANDIDATE_TREE_ENTRIES = 10_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 15_000;
 const MAX_COMMAND_TIMEOUT_MS = 30_000;
 const GIT_TIMEOUT_MS = 30_000;
+const GIT_CONFIG_SCAN_CWD = "/";
 const SANDBOX_TMPFS_BYTES = 16_777_216;
 const SANDBOX_ADDRESS_SPACE_BYTES = 2_147_483_648;
 const SANDBOX_FILE_BYTES = 1_048_576;
@@ -84,10 +86,15 @@ const SECRET_FREE_TOOL_ENVIRONMENT = Object.freeze({
   LANG: "C.UTF-8",
   LC_ALL: "C.UTF-8",
   PATH: "/usr/bin:/bin",
+  // Candidate repositories are local-only verifier inputs. Never permit an
+  // object lookup to select a transport or lazily fetch a missing object.
+  GIT_ALLOW_PROTOCOL: "",
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_NO_LAZY_FETCH: "1",
   GIT_NO_REPLACE_OBJECTS: "1",
   GIT_OPTIONAL_LOCKS: "0",
+  GIT_PROTOCOL_FROM_USER: "0",
   GIT_TERMINAL_PROMPT: "0",
 });
 
@@ -438,7 +445,19 @@ async function git(
   try {
     result = await spawnBounded({
       command: "/usr/bin/git",
-      args: ["-C", repositoryPath, ...args],
+      args: [
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "protocol.allow=never",
+        "-C",
+        repositoryPath,
+        ...args,
+      ],
       environment: SECRET_FREE_TOOL_ENVIRONMENT,
       timeoutMs: GIT_TIMEOUT_MS,
       outputLimit,
@@ -462,8 +481,238 @@ async function git(
   return result.stdout;
 }
 
+const REPOSITORY_INCLUDE_CONFIG = /^(?:include\.path|includeif\..+\.path)$/i;
+const PARTIAL_CLONE_HELPER_CONFIG =
+  /^(?:extensions\.partialclone|remote\..+\.(?:promisor|partialclonefilter|uploadpack))$/i;
+
+async function assertSafeRepositoryGitConfiguration(
+  repositoryPath: string,
+): Promise<void> {
+  let configurationFiles: readonly string[];
+  try {
+    configurationFiles = await repositoryGitConfigurationFiles(repositoryPath);
+  } catch (error) {
+    if (error instanceof LiveEvidenceVerificationFailedError) throw error;
+    throw new LiveEvidenceVerificationFailedError(
+      "The live-evidence repository configuration could not be located safely.",
+    );
+  }
+  const configuredNames = (
+    await Promise.all(
+      configurationFiles.map(scanRepositoryGitConfigurationFile),
+    )
+  ).flatMap((raw) =>
+    raw
+      .toString("utf8")
+      .split("\0")
+      .map((name) => name.trim())
+      .filter(Boolean),
+  );
+  if (
+    configuredNames.some(
+      (name) =>
+        REPOSITORY_INCLUDE_CONFIG.test(name) ||
+        PARTIAL_CLONE_HELPER_CONFIG.test(name),
+    )
+  ) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The live-evidence repository contains unsafe includes or partial-clone helpers.",
+    );
+  }
+}
+
+async function scanRepositoryGitConfigurationFile(
+  configurationFile: string,
+): Promise<Buffer> {
+  let configurationFileStatus;
+  try {
+    configurationFileStatus = await lstat(configurationFile);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return Buffer.alloc(0);
+    }
+    throw new LiveEvidenceVerificationFailedError(
+      "The live-evidence repository configuration could not be checked safely.",
+    );
+  }
+  if (!configurationFileStatus.isFile()) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The live-evidence repository configuration is not a regular file.",
+    );
+  }
+
+  let result: CapturedProcessResult;
+  try {
+    // This must not use `git -C`: repository discovery can parse an include
+    // before the config builtin applies `--no-includes`.
+    result = await spawnBounded({
+      command: "/usr/bin/git",
+      args: [
+        "config",
+        "--file",
+        configurationFile,
+        "--no-includes",
+        "--null",
+        "--name-only",
+        "--list",
+      ],
+      cwd: GIT_CONFIG_SCAN_CWD,
+      environment: SECRET_FREE_TOOL_ENVIRONMENT,
+      timeoutMs: GIT_TIMEOUT_MS,
+      outputLimit: 256 * 1_024,
+    });
+  } catch (error) {
+    throw new LiveEvidenceUnavailableError(
+      "Git was unavailable while checking repository configuration.",
+      { cause: error },
+    );
+  }
+  if (result.timedOut || result.outputLimited || result.exitCode !== 0) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The live-evidence repository configuration could not be checked safely.",
+    );
+  }
+  return result.stdout;
+}
+
+async function repositoryGitConfigurationFiles(
+  repositoryPath: string,
+): Promise<readonly string[]> {
+  const dotGitPath = resolve(repositoryPath, ".git");
+  let dotGitStatus;
+  try {
+    dotGitStatus = await lstat(dotGitPath);
+  } catch (error) {
+    if (!(
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    )) {
+      throw error;
+    }
+    const [headStatus, objectsStatus] = await Promise.all([
+      lstat(join(repositoryPath, "HEAD")),
+      lstat(join(repositoryPath, "objects")),
+    ]);
+    if (!headStatus.isFile() || !objectsStatus.isDirectory()) {
+      throw new LiveEvidenceVerificationFailedError(
+        "The registered live-evidence repository has no recognizable Git directory.",
+      );
+    }
+    return [
+      join(repositoryPath, "config"),
+      join(repositoryPath, "config.worktree"),
+    ];
+  }
+
+  let gitDirectory: string;
+  if (dotGitStatus.isDirectory()) {
+    gitDirectory = await realpath(dotGitPath);
+  } else if (dotGitStatus.isFile()) {
+    const pointer = await readFile(dotGitPath, "utf8");
+    const match = /^gitdir: ([^\0\r\n]+)\r?\n?$/.exec(pointer);
+    if (!match) {
+      throw new LiveEvidenceVerificationFailedError(
+        "The registered worktree Git directory pointer is malformed.",
+      );
+    }
+    gitDirectory = await realpath(resolve(dirname(dotGitPath), match[1]));
+  } else {
+    throw new LiveEvidenceVerificationFailedError(
+      "The registered repository .git entry is not a regular directory or file.",
+    );
+  }
+
+  let commonDirectory = gitDirectory;
+  const pointerPath = join(gitDirectory, "commondir");
+  let pointerStatus;
+  try {
+    pointerStatus = await lstat(pointerPath);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return [
+        join(commonDirectory, "config"),
+        join(gitDirectory, "config.worktree"),
+      ];
+    }
+    throw error;
+  }
+  if (!pointerStatus.isFile()) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The repository common-directory pointer is not a regular file.",
+    );
+  }
+  const pointer = await readFile(pointerPath, "utf8");
+  const value = pointer.replace(/\r?\n$/, "");
+  if (!value || /[\0\r\n]/.test(value)) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The repository common-directory pointer is malformed.",
+    );
+  }
+  commonDirectory = await realpath(resolve(gitDirectory, value));
+
+  return [
+    join(commonDirectory, "config"),
+    join(gitDirectory, "config.worktree"),
+  ];
+}
+
 function text(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+}
+
+async function observeDirectCommitRef(
+  repositoryPath: string,
+  ref: string,
+): Promise<string> {
+  const raw = await git(
+    repositoryPath,
+    [
+      "for-each-ref",
+      "--format=%(refname)%00%(objectname)%00%(objecttype)%00%(symref)%00",
+      ref,
+    ],
+    "observing the exact signed candidate ref",
+    16 * 1_024,
+  );
+  const exactRecords = raw
+    .toString("utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => line.split("\0"))
+    .filter(([refName]) => refName === ref);
+  if (exactRecords.length !== 1) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The signed candidate ref is absent or is not one exact Git ref.",
+    );
+  }
+  const [refName, objectId, objectType, symbolicTarget, terminator] =
+    exactRecords[0] ?? [];
+  if (
+    refName !== ref ||
+    terminator !== "" ||
+    !objectId ||
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(objectId)
+  ) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The signed candidate ref returned malformed raw ref data.",
+    );
+  }
+  if (symbolicTarget) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The signed candidate ref must be a direct Git ref, not a symbolic ref.",
+    );
+  }
+  if (objectType !== "commit") {
+    throw new LiveEvidenceVerificationFailedError(
+      "The signed candidate ref must point directly to a commit object without tag peeling.",
+    );
+  }
+  return objectId;
 }
 
 function zeroObjectId(value: string): boolean {
@@ -555,11 +804,7 @@ async function verifySealedCandidate(
   const [observedFormat, observedRefCommit, parentLine, observedBaseTree, observedTree] =
     await Promise.all([
       git(repositoryPath, ["rev-parse", "--show-object-format"], "reading the object format"),
-      git(
-        repositoryPath,
-        ["rev-parse", "--verify", `${metadata.candidateRef}^{commit}`],
-        "resolving the signed candidate ref",
-      ),
+      observeDirectCommitRef(repositoryPath, metadata.candidateRef),
       git(
         repositoryPath,
         ["rev-list", "--parents", "-n", "1", candidateCommit],
@@ -580,7 +825,7 @@ async function verifySealedCandidate(
   const parents = text(parentLine).split(/\s+/);
   const issues: string[] = [];
   if (text(observedFormat) !== objectFormat) issues.push("Git object format mismatch.");
-  if (text(observedRefCommit) !== candidateCommit) issues.push("Candidate ref mismatch.");
+  if (observedRefCommit !== candidateCommit) issues.push("Candidate ref mismatch.");
   if (parents.length !== 2 || parents[0] !== candidateCommit || parents[1] !== baseCommit) {
     issues.push("Candidate commit must have exactly the signed base commit as its parent.");
   }
@@ -1175,6 +1420,7 @@ export async function verifyLiveEvidence(
     configured.repositoryPath,
     "The registered live-evidence repository",
   );
+  await assertSafeRepositoryGitConfiguration(repositoryPath);
   const toolchainPath = configured.toolchainPath
     ? await trustedDirectory(
         configured.toolchainPath,

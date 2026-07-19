@@ -143,11 +143,15 @@ The transcript remains inspectable as provenance.
 
 The implementation and deterministic adapter evidence for this boundary are verified,
 including real temporary Git repositories and target-ref compare-and-swap behavior.
-An actual external Codex provider run has **not** been observed in this environment
-because neither `OPENAI_API_KEY` nor `CODEX_API_KEY` is configured. Live placement is
-likewise unobserved here. The remaining product work includes provider-backed smoke
-evidence, voice capture, correction/defer/reject controls, onboarding, multi-project
-routing, and Codex thread resume.
+A real external Codex turn has also been observed through the opt-in local-session
+diagnostic using the project-bundled CLI and an existing ChatGPT login. That smoke
+proves only ephemeral CLI connectivity and independently checked disposable artifact
+creation. It is not an authorized ODEU run and cannot produce closure, candidate,
+reconciliation, or promotion evidence. The application's provider-key-backed live
+route and live placement remain unobserved because neither `OPENAI_API_KEY` nor
+`CODEX_API_KEY` is configured. Remaining product work includes that end-to-end live
+route evidence, voice capture, correction/defer/reject controls, onboarding,
+multi-project routing, and Codex thread resume.
 
 ## Example journey
 
@@ -203,6 +207,36 @@ Run the full local verification suite with:
 ```bash
 npm run verify
 ```
+
+To separately check real Codex connectivity with an existing local ChatGPT login, run
+the explicitly gated diagnostic:
+
+```bash
+npm run smoke:codex:local-session -- \
+  --allow-live-provider-call \
+  --evidence-file .working/evidence/local-codex-session-smoke.json
+```
+
+This command makes a real external call on Linux, WSL, or macOS. It runs the
+project-bundled Codex CLI in an ephemeral, disposable, no-worker-network workspace;
+requires one ordered, usage-bearing turn with a successful in-turn local tool event;
+independently checks the one declared artifact and rejects unexpected final workspace
+entries; terminates the bounded process group; removes the workspace; and publishes
+only redacted diagnostic evidence with no ODEU authority. It records the installed
+launcher, native executable, and harness source digests alongside matching lockfile
+metadata, but does not claim the installed bytes were reverified from package-integrity
+metadata. It refuses to run without the
+explicit flag, refuses an existing evidence destination, and requires the additional
+`--allow-ci-live-provider-call` flag under CI. It does not exercise the application's
+signed live route or replace its provider-key requirement. The Codex sandbox is
+configured to restrict writes to the disposable workspace, but its read sandbox is not
+workspace-confined; the diagnostic therefore strips the worker shell environment and
+must still be treated as a trusted-local-machine check rather than a confidential
+read-isolation boundary. Before inspecting effects, the harness repeatedly kills and
+waits for the inherited POSIX process group to disappear, then reads artifacts through
+no-follow descriptors. A process that deliberately escapes that group (for example by
+creating a new session) is not cgroup-contained or proven absent, so the evidence does
+not claim process-tree containment or a race-free workspace snapshot.
 
 Set `ODEU_MANAGER_MODE=live` only with a server-side `OPENAI_API_KEY`. Live Codex mode
 uses `ODEU_CODEX_MODE=live` and a server-side `OPENAI_API_KEY` or `CODEX_API_KEY`. It
@@ -265,9 +299,14 @@ reviewed operator target-ref CAS promotion. Its deterministic evidence includes 
 authorization-prefix binding, the intent/attempt/status chain, and adoption without a
 second CAS. Contract, route, session, and deterministic Git-adapter evidence exercise
 those boundaries. The live placement path targets GPT-5.6 through
-the OpenAI Responses API and the live worker uses the Codex SDK, but no actual external
-provider call has been observed in this environment because `OPENAI_API_KEY` and
-`CODEX_API_KEY` are absent.
+the OpenAI Responses API and the live worker uses the Codex SDK. The separate
+local-session diagnostic successfully observed one real project-bundled Codex CLI turn
+through the existing ChatGPT login on 2026-07-18, including a successful tool-backed
+turn and an artifact whose exact bytes and final workspace contract were host-verified.
+The event stream does not establish which tool causally created that artifact. No
+provider-key-backed application live run has been observed because `OPENAI_API_KEY`
+and `CODEX_API_KEY` remain absent; the diagnostic creates no application authority or
+durable run lineage.
 
 Unit, integration, browser-journey, responsive, and automated accessibility checks
 cover the implemented foundation. Passing tests establish contract behavior in this

@@ -24,7 +24,7 @@ durable slice.
 | Evidence validation wiring | Registered replay verification and exact sealed-live-candidate verification implemented; only server-registered bounded checks may produce requirement observations |
 | Reconciliation/integration wiring | Implemented for replay and live evidence; a live receipt can establish exact-candidate execution but never causal model authorship, and semantic integration never promotes artifacts |
 | Artifact promotion | Implemented as a later exact-origin, transient-Bearer operator authorization and exact Git target-ref compare-and-swap, with a signed private journal and explicit promoted/stale/failed/outcome-unknown outcomes |
-| External provider proof | Not exercised in this environment; `OPENAI_API_KEY` and `CODEX_API_KEY` are absent |
+| External provider proof | A diagnostic-only local ChatGPT-session Codex CLI turn is observed; the provider-key-backed application route is not, because `OPENAI_API_KEY` and `CODEX_API_KEY` are absent |
 
 ## System invariant
 
@@ -360,10 +360,13 @@ linearizes. The configured ledger file and its parent path cannot be symlinks, k
 atomic replacement at the configured path observable. The host also requires the run
 still be queued and live and holds an exclusive worktree lease through execution. The
 worktree must be clean and contain no ignored files; its toolchain belongs outside the
-worker-visible tree. Agent reports are claims; SDK file and command events are retained
-separately as observations. Before a returned live result can leave the execution
-lease, the host writes the worktree changes to a deterministic single-parent candidate
-commit, retains a content-addressed candidate ref, and signs its receipt with a key
+worker-visible tree. Git preflight disables hooks, protocols, and lazy fetching and
+refuses repository/worktree includes, executable filters, promisor/partial-clone
+helpers, and index gitlinks before status or ref inspection. Agent reports are claims;
+SDK file and command events are retained separately as observations. Before a returned
+live result can leave the execution lease, the host writes the worktree changes to a
+deterministic single-parent candidate commit, retains a content-addressed candidate
+ref, and signs its receipt with a key
 distinct from run authorization. The worker never receives the signing secret and
 never moves the authoritative target ref. A blocked report remains a non-closure
 evidence object; the v0 adapter does not yet resume its Codex thread. Other agents may
@@ -395,9 +398,22 @@ request body, or a query string. These settings are declared in `.env.example`; 
 secrets are neither persisted in the browser ledger nor inherited by the worker shell.
 
 Contract, route, session, and deterministic temporary-Git evidence exercise the live
-authority, sealing, validation, and promotion adapters. They do not establish that an
-external Codex provider ran here: both `OPENAI_API_KEY` and `CODEX_API_KEY` were absent
-at this checkpoint, so provider-backed execution remains explicitly unobserved.
+authority, sealing, validation, and promotion adapters. A separate opt-in local-session
+diagnostic observed one real external turn through the project-bundled Codex CLI and
+an existing ChatGPT login, then independently verified its sole disposable artifact.
+The POSIX-only harness repeatedly kills and waits for the inherited process group to
+disappear before reading artifacts through no-follow descriptors, requires an ordered
+usage-bearing turn with a successful local tool event, and records installed CLI/native
+and harness-source digests without claiming causal tool authorship or package-integrity
+reverification of those installed bytes. This is not cgroup-level process-tree
+containment: a descendant that deliberately starts a new session is not proven absent,
+and the diagnostic therefore claims neither escaped-descendant containment nor a
+race-free workspace snapshot.
+That evidence is intentionally non-authoritative: it does not pass through the signed
+application live route and cannot establish a closure, retained candidate,
+reconciliation, or promotion. Both `OPENAI_API_KEY` and `CODEX_API_KEY` were absent at
+this checkpoint, so the provider-key-backed application route remains explicitly
+unobserved.
 
 ### 5. Source and evidence archive
 

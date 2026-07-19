@@ -17,12 +17,36 @@ import {
   isolatedPreflightGitEnvironment,
   isolatedWorkerShellEnvironment,
   LiveCodexBlockedError,
+  observeExactDirectTargetCommit,
   runPreflightGit,
   unsafeIgnoredWorkspaceEntries,
 } from "./live";
 
 const execFile = promisify(execFileCallback);
 const originalMode = process.env.ODEU_CODEX_MODE;
+
+async function createCommittedGitWorkspace(prefix: string) {
+  const workspace = await mkdtemp(join(tmpdir(), prefix));
+  await execFile("git", ["-C", workspace, "init", "--quiet"]);
+  await writeFile(join(workspace, "tracked.txt"), "seed\n");
+  await execFile("git", ["-C", workspace, "add", "tracked.txt"]);
+  await execFile("git", [
+    "-C",
+    workspace,
+    "-c",
+    "user.name=ODEU Test",
+    "-c",
+    "user.email=odeu@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "seed",
+  ]);
+  const head = (
+    await execFile("git", ["-C", workspace, "rev-parse", "HEAD"])
+  ).stdout.trim();
+  return { workspace, head };
+}
 
 afterEach(() => {
   if (originalMode === undefined) delete process.env.ODEU_CODEX_MODE;
@@ -164,6 +188,8 @@ describe("codexFailure", () => {
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_GLOBAL:
           process.platform === "win32" ? "NUL" : "/dev/null",
+        GIT_ALLOW_PROTOCOL: "",
+        GIT_NO_LAZY_FETCH: "1",
         GIT_NO_REPLACE_OBJECTS: "1",
         GIT_OPTIONAL_LOCKS: "0",
         GIT_TERMINAL_PROMPT: "0",
@@ -176,6 +202,8 @@ describe("codexFailure", () => {
           "LC_ALL",
           "GIT_CONFIG_NOSYSTEM",
           "GIT_CONFIG_GLOBAL",
+          "GIT_ALLOW_PROTOCOL",
+          "GIT_NO_LAZY_FETCH",
           "GIT_NO_REPLACE_OBJECTS",
           "GIT_OPTIONAL_LOCKS",
           "GIT_TERMINAL_PROMPT",
@@ -254,6 +282,370 @@ describe("codexFailure", () => {
 
       await expect(readFile(marker, "utf8")).rejects.toMatchObject({
         code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed before a repository-configured clean filter can execute", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "odeu-live-filter-"));
+    const marker = join(workspace, "filter-invoked");
+    const filter = join(workspace, "filter-probe.sh");
+    try {
+      await execFile("git", ["-C", workspace, "init", "--quiet"]);
+      await writeFile(join(workspace, "tracked.txt"), "seed\n");
+      await writeFile(
+        join(workspace, ".gitattributes"),
+        "tracked.txt filter=odeu-probe\n",
+      );
+      await execFile("git", [
+        "-C",
+        workspace,
+        "add",
+        ".gitattributes",
+        "tracked.txt",
+      ]);
+      await execFile("git", [
+        "-C",
+        workspace,
+        "-c",
+        "user.name=ODEU Test",
+        "-c",
+        "user.email=odeu@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "seed",
+      ]);
+      await writeFile(
+        filter,
+        [
+          "#!/bin/sh",
+          `printf 'invoked\\n' > ${JSON.stringify(marker)}`,
+          "cat",
+          "",
+        ].join("\n"),
+        { mode: 0o700 },
+      );
+      await execFile("git", [
+        "-C",
+        workspace,
+        "config",
+        "filter.odeu-probe.clean",
+        `sh ${JSON.stringify(filter)}`,
+      ]);
+      await writeFile(join(workspace, "tracked.txt"), "changed\n");
+
+      await execFile("git", ["-C", workspace, "diff", "--", "tracked.txt"]);
+      await expect(readFile(marker, "utf8")).resolves.toBe("invoked\n");
+      await rm(marker);
+
+      await expect(
+        runPreflightGit(workspace, ["status", "--porcelain=v1"]),
+      ).rejects.toMatchObject({
+        name: "LiveCodexConfigurationError",
+        message:
+          "Live Codex Git preflight refuses repository/worktree configuration that can include external files, execute filters, or enable repository-controlled object fetching.",
+      });
+      await expect(readFile(marker, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on repository-configured partial-clone fetching", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "odeu-live-promisor-"));
+    try {
+      await execFile("git", ["-C", workspace, "init", "--quiet"]);
+      await writeFile(join(workspace, "tracked.txt"), "seed\n");
+      await execFile("git", ["-C", workspace, "add", "tracked.txt"]);
+      await execFile("git", [
+        "-C",
+        workspace,
+        "-c",
+        "user.name=ODEU Test",
+        "-c",
+        "user.email=odeu@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "seed",
+      ]);
+      await execFile("git", [
+        "-C",
+        workspace,
+        "config",
+        "remote.origin.promisor",
+        "true",
+      ]);
+      await execFile("git", [
+        "-C",
+        workspace,
+        "config",
+        "remote.origin.partialCloneFilter",
+        "blob:none",
+      ]);
+
+      await expect(
+        runPreflightGit(workspace, ["rev-parse", "HEAD"]),
+      ).rejects.toMatchObject({
+        name: "LiveCodexConfigurationError",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on a repository-configured uploadPack command", async () => {
+    const { workspace } =
+      await createCommittedGitWorkspace("odeu-live-upload-pack-");
+    try {
+      await execFile("git", [
+        "-C",
+        workspace,
+        "config",
+        "remote.origin.uploadPack",
+        "untrusted-upload-pack",
+      ]);
+
+      await expect(
+        runPreflightGit(workspace, ["rev-parse", "HEAD"]),
+      ).rejects.toMatchObject({
+        name: "LiveCodexConfigurationError",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reject a non-executable filter.required setting", async () => {
+    const { workspace, head } =
+      await createCommittedGitWorkspace("odeu-live-filter-required-");
+    try {
+      await execFile("git", [
+        "-C",
+        workspace,
+        "config",
+        "filter.odeu-probe.required",
+        "true",
+      ]);
+
+      await expect(
+        runPreflightGit(workspace, ["rev-parse", "HEAD"]),
+      ).resolves.toBe(head);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a local include.path without opening the included config", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "odeu-live-include-"));
+    const includedConfig = join(workspace, "malformed-included-config");
+    try {
+      await execFile("git", ["-C", workspace, "init", "--quiet"]);
+      await writeFile(includedConfig, "[malformed\n");
+      await execFile("git", [
+        "-C",
+        workspace,
+        "config",
+        "--local",
+        "include.path",
+        includedConfig,
+      ]);
+
+      await expect(
+        runPreflightGit(workspace, ["rev-parse", "--git-dir"]),
+      ).rejects.toMatchObject({
+        name: "LiveCodexConfigurationError",
+        message:
+          "Live Codex Git preflight refuses repository/worktree configuration that can include external files, execute filters, or enable repository-controlled object fetching.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an includeIf path from worktree configuration", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "odeu-live-worktree-include-"),
+    );
+    const includedConfig = join(workspace, "malformed-included-config");
+    try {
+      await execFile("git", ["-C", workspace, "init", "--quiet"]);
+      await writeFile(includedConfig, "[malformed\n");
+      await execFile("git", [
+        "-C",
+        workspace,
+        "config",
+        "extensions.worktreeConfig",
+        "true",
+      ]);
+      await execFile("git", [
+        "-C",
+        workspace,
+        "config",
+        "--worktree",
+        `includeIf.gitdir:${join(workspace, ".git")}.path`,
+        includedConfig,
+      ]);
+
+      await expect(
+        runPreflightGit(workspace, ["rev-parse", "--git-dir"]),
+      ).rejects.toMatchObject({
+        name: "LiveCodexConfigurationError",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an index gitlink before invoking status", async () => {
+    const { workspace, head } =
+      await createCommittedGitWorkspace("odeu-live-gitlink-");
+    try {
+      await execFile("git", [
+        "-C",
+        workspace,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        `160000,${head},nested-repository`,
+      ]);
+
+      await expect(
+        runPreflightGit(workspace, ["status", "--porcelain=v1"]),
+      ).rejects.toMatchObject({
+        name: "LiveCodexConfigurationError",
+        message: "Live Codex Git preflight refuses index gitlinks and submodules.",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts only a raw direct target ref equal to HEAD", async () => {
+    const { workspace, head } =
+      await createCommittedGitWorkspace("odeu-live-direct-target-");
+    const targetRef = "refs/heads/promotion-target";
+    try {
+      await execFile("git", [
+        "-C",
+        workspace,
+        "update-ref",
+        targetRef,
+        head,
+      ]);
+
+      await expect(
+        observeExactDirectTargetCommit(workspace, targetRef),
+      ).resolves.toBe(head);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symbolic and annotated promotion targets without peeling", async () => {
+    const { workspace, head } =
+      await createCommittedGitWorkspace("odeu-live-indirect-target-");
+    const currentRef = (
+      await execFile("git", ["-C", workspace, "symbolic-ref", "HEAD"])
+    ).stdout.trim();
+    try {
+      const symbolicTarget = "refs/heads/symbolic-target";
+      await execFile("git", [
+        "-C",
+        workspace,
+        "symbolic-ref",
+        symbolicTarget,
+        currentRef,
+      ]);
+      await expect(
+        observeExactDirectTargetCommit(workspace, symbolicTarget),
+      ).rejects.toMatchObject({
+        name: "LiveCodexPreflightError",
+        code: "artifact_base_mismatch",
+      });
+
+      await execFile("git", [
+        "-C",
+        workspace,
+        "-c",
+        "user.name=ODEU Test",
+        "-c",
+        "user.email=odeu@example.invalid",
+        "tag",
+        "--annotate",
+        "annotated-target",
+        "--message",
+        "promotion target",
+        head,
+      ]);
+      await expect(
+        observeExactDirectTargetCommit(
+          workspace,
+          "refs/tags/annotated-target",
+        ),
+      ).rejects.toMatchObject({
+        name: "LiveCodexPreflightError",
+        code: "artifact_base_mismatch",
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("detects target-ref drift when the sealing invariant is re-observed", async () => {
+    const { workspace, head } =
+      await createCommittedGitWorkspace("odeu-live-target-race-");
+    const targetRef = "refs/heads/promotion-target";
+    try {
+      await execFile("git", [
+        "-C",
+        workspace,
+        "update-ref",
+        targetRef,
+        head,
+      ]);
+      await expect(
+        observeExactDirectTargetCommit(workspace, targetRef),
+      ).resolves.toBe(head);
+
+      const tree = (
+        await execFile("git", ["-C", workspace, "rev-parse", "HEAD^{tree}"])
+      ).stdout.trim();
+      const driftedCommit = (
+        await execFile("git", [
+          "-C",
+          workspace,
+          "-c",
+          "user.name=ODEU Test",
+          "-c",
+          "user.email=odeu@example.invalid",
+          "commit-tree",
+          tree,
+          "-p",
+          head,
+          "-m",
+          "drifted target",
+        ])
+      ).stdout.trim();
+      await execFile("git", [
+        "-C",
+        workspace,
+        "update-ref",
+        targetRef,
+        driftedCommit,
+        head,
+      ]);
+
+      await expect(
+        observeExactDirectTargetCommit(workspace, targetRef, head),
+      ).rejects.toMatchObject({
+        name: "LiveCodexPreflightError",
+        code: "artifact_base_mismatch",
       });
     } finally {
       await rm(workspace, { recursive: true, force: true });

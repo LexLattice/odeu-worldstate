@@ -2,8 +2,8 @@ import "server-only";
 
 import { Codex, type ThreadItem } from "@openai/codex-sdk";
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdir, readFile, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 
@@ -88,6 +88,8 @@ export class LiveCodexBlockedError extends Error {
 const MAX_AUTHORIZATION_TTL_MS = 10 * 60 * 1_000;
 const MAX_CLOCK_SKEW_MS = 30 * 1_000;
 const GIT_NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
+const GIT_CONFIG_SCAN_CWD =
+  process.platform === "win32" ? (process.env.SYSTEMROOT ?? "C:\\") : "/";
 
 function containsPath(parent: string, candidate: string): boolean {
   const path = relative(parent, candidate);
@@ -122,6 +124,8 @@ export function isolatedPreflightGitEnvironment(): NodeJS.ProcessEnv {
     LC_ALL: "C.UTF-8",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: GIT_NULL_DEVICE,
+    GIT_ALLOW_PROTOCOL: "",
+    GIT_NO_LAZY_FETCH: "1",
     GIT_NO_REPLACE_OBJECTS: "1",
     GIT_OPTIONAL_LOCKS: "0",
     GIT_TERMINAL_PROMPT: "0",
@@ -140,7 +144,7 @@ export function isolatedPreflightGitEnvironment(): NodeJS.ProcessEnv {
   return environment;
 }
 
-export async function runPreflightGit(
+async function executePreflightGit(
   workspace: string,
   args: readonly string[],
 ): Promise<string> {
@@ -153,6 +157,8 @@ export async function runPreflightGit(
       `core.hooksPath=${GIT_NULL_DEVICE}`,
       "-c",
       "credential.helper=",
+      "-c",
+      "protocol.allow=never",
       "-C",
       workspace,
       ...args,
@@ -163,6 +169,225 @@ export async function runPreflightGit(
     },
   );
   return result.stdout.trim();
+}
+
+function unsafePreflightGitConfigurationKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return (
+    normalized === "include.path" ||
+    /^includeif\..+\.path$/.test(normalized) ||
+    /^filter\..+\.(?:clean|smudge|process)$/.test(normalized) ||
+    normalized === "extensions.partialclone" ||
+    /^remote\..+\.(?:promisor|partialclonefilter|uploadpack)$/.test(normalized)
+  );
+}
+
+async function assertSafePreflightGitConfiguration(
+  workspace: string,
+): Promise<void> {
+  // Run the config builtin outside repository discovery and point it at the
+  // repository files explicitly. `git -C <workspace> config --no-includes`
+  // is insufficient: Git can parse local includes while dispatching the builtin,
+  // before that option takes effect.
+  const configuredKeys = (
+    await Promise.all(
+      (await preflightGitConfigurationFiles(workspace)).map(
+        async (configurationFile) => {
+          let configurationFileStat;
+          try {
+            configurationFileStat = await lstat(configurationFile);
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              "code" in error &&
+              error.code === "ENOENT"
+            ) {
+              return "";
+            }
+            throw error;
+          }
+          if (!configurationFileStat.isFile()) {
+            throw new LiveCodexConfigurationError(
+              "Live Codex Git preflight requires regular repository configuration files.",
+            );
+          }
+          const result = await execFile(
+            "git",
+            [
+              "config",
+              "--file",
+              configurationFile,
+              "--no-includes",
+              "--null",
+              "--name-only",
+              "--list",
+            ],
+            {
+              cwd: GIT_CONFIG_SCAN_CWD,
+              encoding: "utf8",
+              env: isolatedPreflightGitEnvironment(),
+            },
+          );
+          return result.stdout;
+        },
+      ),
+    )
+  )
+    .join("")
+    .split("\0")
+    .filter(Boolean);
+  if (configuredKeys.some(unsafePreflightGitConfigurationKey)) {
+    throw new LiveCodexConfigurationError(
+      "Live Codex Git preflight refuses repository/worktree configuration that can include external files, execute filters, or enable repository-controlled object fetching.",
+    );
+  }
+}
+
+async function preflightGitConfigurationFiles(
+  workspace: string,
+): Promise<string[]> {
+  const dotGitPath = resolve(workspace, ".git");
+  const dotGitStat = await lstat(dotGitPath);
+  let gitDirectory: string;
+  if (dotGitStat.isDirectory()) {
+    gitDirectory = await realpath(dotGitPath);
+  } else if (dotGitStat.isFile()) {
+    const pointer = await readFile(dotGitPath, "utf8");
+    const match = /^gitdir: ([^\0\r\n]+)\r?\n?$/.exec(pointer);
+    if (!match) {
+      throw new LiveCodexConfigurationError(
+        "Live Codex Git preflight could not safely resolve the worktree Git directory.",
+      );
+    }
+    gitDirectory = await realpath(resolve(dirname(dotGitPath), match[1]));
+  } else {
+    throw new LiveCodexConfigurationError(
+      "Live Codex Git preflight requires a regular .git directory or pointer file.",
+    );
+  }
+
+  let commonDirectory = gitDirectory;
+  const commonDirectoryPointerPath = join(gitDirectory, "commondir");
+  let commonDirectoryPointerStat;
+  try {
+    commonDirectoryPointerStat = await lstat(commonDirectoryPointerPath);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return [
+        join(commonDirectory, "config"),
+        join(gitDirectory, "config.worktree"),
+      ];
+    }
+    throw error;
+  }
+  if (!commonDirectoryPointerStat.isFile()) {
+    throw new LiveCodexConfigurationError(
+      "Live Codex Git preflight requires a regular common-directory pointer file.",
+    );
+  }
+  const commonDirectoryPointer = await readFile(
+    commonDirectoryPointerPath,
+    "utf8",
+  );
+  const value = commonDirectoryPointer.replace(/\r?\n$/, "");
+  if (!value || /[\0\r\n]/.test(value)) {
+    throw new LiveCodexConfigurationError(
+      "Live Codex Git preflight could not safely resolve the common Git directory.",
+    );
+  }
+  commonDirectory = await realpath(resolve(gitDirectory, value));
+
+  return [
+    join(commonDirectory, "config"),
+    join(gitDirectory, "config.worktree"),
+  ];
+}
+
+async function assertNoPreflightIndexGitlinks(
+  workspace: string,
+): Promise<void> {
+  const indexEntries = await executePreflightGit(workspace, [
+    "ls-files",
+    "--stage",
+    "-z",
+  ]);
+  if (
+    indexEntries
+      .split("\0")
+      .filter(Boolean)
+      .some((entry) => entry.startsWith("160000 "))
+  ) {
+    throw new LiveCodexConfigurationError(
+      "Live Codex Git preflight refuses index gitlinks and submodules.",
+    );
+  }
+}
+
+export async function runPreflightGit(
+  workspace: string,
+  args: readonly string[],
+): Promise<string> {
+  await assertSafePreflightGitConfiguration(workspace);
+  if (args[0] === "status") {
+    await assertNoPreflightIndexGitlinks(workspace);
+  }
+  return executePreflightGit(workspace, args);
+}
+
+export async function observeExactDirectTargetCommit(
+  workspace: string,
+  targetRef: string,
+  expectedCommit?: string,
+): Promise<string> {
+  if (!targetRef.startsWith("refs/")) {
+    throw new LiveCodexConfigurationError(
+      "ODEU_CODEX_PROMOTION_TARGET_REF must be a valid full Git ref.",
+    );
+  }
+  try {
+    await runPreflightGit(workspace, ["check-ref-format", targetRef]);
+  } catch (error) {
+    if (error instanceof LiveCodexConfigurationError) throw error;
+    throw new LiveCodexConfigurationError(
+      "ODEU_CODEX_PROMOTION_TARGET_REF must be a valid full Git ref.",
+    );
+  }
+
+  const [observedHead, rawTargetRefs] = await Promise.all([
+    runPreflightGit(workspace, ["rev-parse", "HEAD"]),
+    runPreflightGit(workspace, [
+      "for-each-ref",
+      "--format=%(refname)%00%(objectname)%00%(objecttype)%00%(symref)",
+      "--count=2",
+      "--",
+      targetRef,
+    ]),
+  ]);
+  const exactMatches = rawTargetRefs
+    .split("\n")
+    .filter(Boolean)
+    .map((row) => row.split("\0"))
+    .filter(([refName]) => refName === targetRef);
+  const [match] = exactMatches;
+  const [, objectName, objectType, symbolicTarget] = match ?? [];
+  if (
+    exactMatches.length !== 1 ||
+    objectName !== observedHead ||
+    objectType !== "commit" ||
+    symbolicTarget !== "" ||
+    (expectedCommit !== undefined && observedHead !== expectedCommit)
+  ) {
+    throw new LiveCodexPreflightError(
+      "artifact_base_mismatch",
+      `The configured promotion target ${targetRef} must remain an exact direct non-symbolic commit ref equal to workspace HEAD.`,
+    );
+  }
+
+  return observedHead;
 }
 
 export function isolatedEnvironment(codexHome: string): Record<string, string> {
@@ -395,8 +620,7 @@ async function preflightLiveRun(request: AgentRunRequest, preflightAt: Date) {
   }
 
   try {
-    const [observedSha, dirtyState, ignoredState] = await Promise.all([
-      runPreflightGit(workspace, ["rev-parse", "HEAD"]),
+    const [dirtyState, ignoredState] = await Promise.all([
       runPreflightGit(workspace, [
         "status",
         "--porcelain=v1",
@@ -411,6 +635,10 @@ async function preflightLiveRun(request: AgentRunRequest, preflightAt: Date) {
         "--ignore-submodules=none",
       ]),
     ]);
+    const observedSha = await observeExactDirectTargetCommit(
+      workspace,
+      targetRef,
+    );
     const artifactMatch = request.brief.artifactBaseRef.match(
       /^(?:git|commit):([0-9a-f]{40}|[0-9a-f]{64})$/,
     );
@@ -616,8 +844,13 @@ export async function runLiveCodex(
     }
 
     const sdkObservations = observedSdkEvidence(items);
-    const sealReturnedCandidate = async (): Promise<ArtifactCandidateReceipt> =>
-      (
+    const sealReturnedCandidate = async (): Promise<ArtifactCandidateReceipt> => {
+      await observeExactDirectTargetCommit(
+        workspace,
+        targetRef,
+        observedCommit,
+      );
+      return (
         await sealLiveWorkspaceCandidate({
           workspace,
           repositoryId,
@@ -631,6 +864,7 @@ export async function runLiveCodex(
           signing: artifactSigning,
         })
       ).receipt;
+    };
 
     if (reported.outcome === "blocked") {
       lifecycle.push({
