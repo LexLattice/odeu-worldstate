@@ -44,6 +44,10 @@ import {
   ShieldIcon,
   SparkIcon,
 } from "./icons";
+import type {
+  WorldstatePresentationCommand,
+  WorldstatePresentationState,
+} from "./presentation";
 import { ProjectionSurface } from "./projections";
 import type {
   PlacementSurface,
@@ -528,6 +532,10 @@ export interface WorldstateWorkbenchProps {
   initialView?: ProjectionView;
   session?: WorldstateSession;
   autoInitialize?: boolean;
+  presentationCommand?: WorldstatePresentationCommand;
+  onPresentationStateChange?: (
+    state: WorldstatePresentationState,
+  ) => void;
   onSelectionChange?: (worldstateId: string) => void;
   onSemanticCommit?: () => void;
   onViewChange?: (view: ProjectionView) => void;
@@ -543,6 +551,8 @@ export function WorldstateWorkbench({
   initialView,
   session,
   autoInitialize = true,
+  presentationCommand,
+  onPresentationStateChange,
   onSelectionChange,
   onSemanticCommit,
   onAgentDispatch,
@@ -568,6 +578,7 @@ export function WorldstateWorkbench({
   const initializedSession = useRef<WorldstateSession | null>(null);
   const selectionHydrated = useRef(false);
   const lastCandidateId = useRef<string | null>(null);
+  const handledPresentationCommandIds = useRef(new Set<string>());
   const [selectedView, setSelectedView] = useState<ProjectionView | undefined>(
     initialView,
   );
@@ -719,6 +730,76 @@ export function WorldstateWorkbench({
       active = false;
     };
   }, [model, selectedId, snapshot.retry]);
+
+  useEffect(() => {
+    if (
+      !model ||
+      !presentationCommand ||
+      handledPresentationCommandIds.current.has(presentationCommand.id)
+    ) {
+      return;
+    }
+
+    let active = true;
+    queueMicrotask(() => {
+      if (
+        !active ||
+        handledPresentationCommandIds.current.has(presentationCommand.id)
+      ) {
+        return;
+      }
+      handledPresentationCommandIds.current.add(presentationCommand.id);
+
+      switch (presentationCommand.type) {
+        case "select_project":
+          if (presentationCommand.projectId !== model.projectId) return;
+          setAnnouncement(`${model.project} is the active project.`);
+          return;
+        case "select_view":
+          setSelectedView(presentationCommand.view);
+          onViewChange?.(presentationCommand.view);
+          setAnnouncement(
+            `${presentationCommand.view[0].toUpperCase()}${presentationCommand.view.slice(1)} view selected.`,
+          );
+          return;
+        case "select_object": {
+          const selected = model.nodes.find(
+            (node) => node.id === presentationCommand.objectId,
+          );
+          if (!selected) return;
+          setSelectedId(selected.id);
+          onSelectionChange?.(selected.id);
+          setAnnouncement(`Selected ${selected.label}.`);
+        }
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [model, onSelectionChange, onViewChange, presentationCommand]);
+
+  const presentationState = useMemo<WorldstatePresentationState | null>(
+    () =>
+      model
+        ? {
+            projectId: model.projectId,
+            projectLabel: model.project,
+            view: activeView,
+            selectedObjectId: selectedId,
+            selectedObjectLabel:
+              model.nodes.find((node) => node.id === selectedId)?.label ??
+              selectedId,
+          }
+        : null,
+    [activeView, model, selectedId],
+  );
+
+  useEffect(() => {
+    if (presentationState) {
+      onPresentationStateChange?.(presentationState);
+    }
+  }, [onPresentationStateChange, presentationState]);
 
   useEffect(() => {
     if (!model) return;
@@ -1134,9 +1215,12 @@ export function WorldstateWorkbench({
       snapshot.persistenceState === "corrupt";
     return (
       <main
+        aria-label="Worldstate workbench"
         className={styles.workbench}
         data-morphic-root="worldstate-workbench"
         data-persistence-state={snapshot.persistenceState}
+        data-presentation-focus-target="workbench"
+        tabIndex={-1}
       >
         <section aria-live="polite" className={styles.loadingShell}>
           <strong>
@@ -1170,13 +1254,16 @@ export function WorldstateWorkbench({
 
   return (
     <main
+      aria-label="Worldstate workbench"
       className={styles.workbench}
       data-morphic-root="worldstate-workbench"
       data-persistence-state={model.persistence.state}
+      data-presentation-focus-target="workbench"
       data-runtime-mode={model.runtime.mode}
       data-selected-object-id={selectedId}
       data-view={activeView}
       data-worldstate-revision={model.revision}
+      tabIndex={-1}
     >
       <a className={styles.skipLink} href="#primary-projection">
         Skip to project projection

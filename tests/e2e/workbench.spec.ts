@@ -6,6 +6,22 @@ import { HOME_MOVE_REPLAY_IDENTITY } from "../../src/adapters/replay-evidence/bu
 const SOURCE =
   "Ask Codex to add a simple moving-cost comparison tool to my relocation project.";
 
+async function openWorkbench(page: Page): Promise<void> {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Skip", exact: true }).click();
+  await expect(
+    page.locator("[data-morphic-root='worldstate-workbench']"),
+  ).toHaveAttribute("data-worldstate-revision", /.+/);
+}
+
+async function reopenWorkbench(page: Page): Promise<void> {
+  await page.reload();
+  await page.getByRole("button", { name: "Skip", exact: true }).click();
+  await expect(
+    page.locator("[data-morphic-root='worldstate-workbench']"),
+  ).toHaveAttribute("data-worldstate-revision", /.+/);
+}
+
 async function persistedLedgerEventCount(page: Page): Promise<number> {
   return page.evaluate(
     () =>
@@ -65,7 +81,7 @@ async function persistedLedgerEventTypeCount(
 test("persists capture and placement before one semantic commit, then reloads exactly", async ({
   page,
 }) => {
-  await page.goto("/");
+  await openWorkbench(page);
   const root = page.locator("[data-morphic-root='worldstate-workbench']");
   const capture = page.getByRole("button", { name: "Capture & place" });
   await expect(capture).toBeVisible();
@@ -94,7 +110,7 @@ test("persists capture and placement before one semantic commit, then reloads ex
   expect(adoptedSelectedObject).toBeTruthy();
   expect(adoptedReceipt).toMatch(/^receipt-/);
 
-  await page.reload();
+  await reopenWorkbench(page);
   await expect(page.getByRole("button", { name: "Placement adopted" })).toBeDisabled();
   await expect(root).toHaveAttribute("data-worldstate-revision", adoptedRevision as string);
   await expect(root).toHaveAttribute(
@@ -115,7 +131,7 @@ test("persists capture and placement before one semantic commit, then reloads ex
 test("stages, validates, reconciles, and explicitly integrates one replay result", async ({
   page,
 }) => {
-  await page.goto("/");
+  await openWorkbench(page);
   const root = page.locator("[data-morphic-root='worldstate-workbench']");
   await page.getByRole("button", { name: "Capture & place" }).click();
   await page.getByRole("button", { name: "Adopt this placement" }).click();
@@ -380,7 +396,7 @@ test("stages, validates, reconciles, and explicitly integrates one replay result
     .analyze();
   expect(integrationAccessibility.violations).toEqual([]);
 
-  await page.reload();
+  await reopenWorkbench(page);
 
   await expect(
     page.getByText(`Fixture replay · ${HOME_MOVE_REPLAY_IDENTITY}`),
@@ -413,7 +429,7 @@ test("stages, validates, reconciles, and explicitly integrates one replay result
 test("shows one dynamic candidate in outline, map, timeline, and focus without ledger writes", async ({
   page,
 }) => {
-  await page.goto("/");
+  await openWorkbench(page);
   await page.getByRole("button", { name: "Capture & place" }).click();
   await expect(page.getByRole("button", { name: "Adopt this placement" })).toBeEnabled();
 
@@ -441,7 +457,7 @@ test("keeps runtime truth and evidence-before-commit visible on a narrow screen"
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
+  await openWorkbench(page);
   const root = page.locator("[data-morphic-root='worldstate-workbench']");
 
   await expect(root).toHaveAttribute("data-view", "focus");
@@ -476,7 +492,7 @@ test("keeps runtime truth and evidence-before-commit visible on a narrow screen"
 test("requires explicit confirmation and leaves the sandbox reusable after reset", async ({
   page,
 }) => {
-  await page.goto("/");
+  await openWorkbench(page);
   await page.getByRole("button", { name: "Capture & place" }).click();
   await expect(page.getByRole("button", { name: "Adopt this placement" })).toBeEnabled();
 
@@ -491,7 +507,7 @@ test("requires explicit confirmation and leaves the sandbox reusable after reset
 });
 
 test("has no automatically detectable accessibility violations", async ({ page }) => {
-  await page.goto("/");
+  await openWorkbench(page);
   await expect(page.getByRole("button", { name: "Capture & place" })).toBeVisible();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: "Skip to project projection" })).toBeFocused();

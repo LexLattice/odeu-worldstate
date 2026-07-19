@@ -316,6 +316,16 @@ draft text, and reset confirmation. Canonical nodes, relations, receipts, event 
 and revision labels are rebuilt from the persisted ledger. Map coordinates are a
 deterministic projection artifact and never enter canonical state.
 
+The opening onboarding chapter is a separate presentation control plane over that
+same Studio. Consent offers `Interactive`, `Watch only`, and `Skip`; guidance can be
+paused, resumed, replayed, and shown with or without captions, while unavailable audio
+is stated explicitly. Progress is derived from the workbench's observed project, view,
+and selected-object state rather than elapsed time or simulated clicks. In watch-only
+mode the guide may issue idempotent typed commands to select a project, projection, or
+object. Those commands have no ledger, gateway, session, provider, or agent authority.
+The opening stops at the source-capture handoff and, after ordinary sandbox bootstrap,
+adds no canonical event and advances no revision.
+
 ### 4. Projection and agent boundary
 
 An agent does not receive the canonical worldstate. The projection compiler produces

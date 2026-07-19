@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -65,6 +65,7 @@ import {
 import { domainBriefToCodexRunRequest } from "@/integration/domain-brief-to-codex";
 
 import { buildWorkbenchViewModel } from "./view-model";
+import type { WorldstatePresentationState } from "./presentation";
 import type { WorkSurface } from "./types";
 import { WorkPanel, WorldstateWorkbench } from "./worldstate-workbench";
 
@@ -324,6 +325,157 @@ function replayValidationSnapshot(
 }
 
 describe("WorldstateWorkbench", () => {
+  it("applies each typed presentation command identity once without changing canonical state", async () => {
+    const { session } = sessionHarness();
+    const onPresentationStateChange =
+      vi.fn<(state: WorldstatePresentationState) => void>();
+    const onSelectionChange = vi.fn();
+    const onViewChange = vi.fn();
+    const { container, rerender } = render(
+      <WorldstateWorkbench
+        initialView="outline"
+        onPresentationStateChange={onPresentationStateChange}
+        onSelectionChange={onSelectionChange}
+        onViewChange={onViewChange}
+        session={session}
+      />,
+    );
+
+    const root = await waitFor(() => {
+      const rendered = container.querySelector(
+        "[data-morphic-root='worldstate-workbench'][data-worldstate-revision]",
+      );
+      expect(rendered).toBeInTheDocument();
+      return rendered;
+    });
+    const initialLedger = session.getSnapshot().ledger;
+    const initialRevision = session.getSnapshot().state?.canonical.head.id;
+
+    rerender(
+      <WorldstateWorkbench
+        initialView="outline"
+        onPresentationStateChange={onPresentationStateChange}
+        onSelectionChange={onSelectionChange}
+        onViewChange={onViewChange}
+        presentationCommand={{
+          id: "presentation-command-view",
+          type: "select_view",
+          view: "focus",
+        }}
+        session={session}
+      />,
+    );
+    await waitFor(() => {
+      expect(root).toHaveAttribute("data-view", "focus");
+      expect(onViewChange).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      rerender(
+        <WorldstateWorkbench
+          initialView="outline"
+          onPresentationStateChange={onPresentationStateChange}
+          onSelectionChange={onSelectionChange}
+          onViewChange={onViewChange}
+          presentationCommand={{
+            id: "presentation-command-view",
+            type: "select_view",
+            view: "outline",
+          }}
+          session={session}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(root).toHaveAttribute("data-view", "focus");
+    expect(onViewChange).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <WorldstateWorkbench
+        initialView="outline"
+        onPresentationStateChange={onPresentationStateChange}
+        onSelectionChange={onSelectionChange}
+        onViewChange={onViewChange}
+        presentationCommand={{
+          id: "presentation-command-object",
+          type: "select_object",
+          objectId: HOME_MOVE_IDS.goal,
+        }}
+        session={session}
+      />,
+    );
+    await waitFor(() => {
+      expect(root).toHaveAttribute(
+        "data-selected-object-id",
+        HOME_MOVE_IDS.goal,
+      );
+      expect(onSelectionChange).toHaveBeenCalledWith(HOME_MOVE_IDS.goal);
+      expect(onPresentationStateChange).toHaveBeenLastCalledWith({
+        projectId: HOME_MOVE_IDS.project,
+        projectLabel: "Plan our home move",
+        view: "focus",
+        selectedObjectId: HOME_MOVE_IDS.goal,
+        selectedObjectLabel: "Complete the move for less than €4,000",
+      });
+    });
+
+    expect(session.getSnapshot().ledger?.events).toHaveLength(
+      initialLedger?.events.length ?? 0,
+    );
+    expect(session.getSnapshot().state?.canonical.head.id).toBe(
+      initialRevision,
+    );
+  });
+
+  it("rejects unsupported presentation targets without projecting them", async () => {
+    const { session } = sessionHarness();
+    const onSelectionChange = vi.fn();
+    const { container, rerender } = render(
+      <WorldstateWorkbench
+        onSelectionChange={onSelectionChange}
+        presentationCommand={{
+          id: "presentation-command-unsupported-object",
+          type: "select_object",
+          objectId: "node-not-in-this-project",
+        }}
+        session={session}
+      />,
+    );
+
+    const root = await waitFor(() => {
+      const rendered = container.querySelector(
+        "[data-morphic-root='worldstate-workbench'][data-worldstate-revision]",
+      );
+      expect(rendered).toHaveAttribute(
+        "data-selected-object-id",
+        HOME_MOVE_IDS.budget,
+      );
+      return rendered;
+    });
+    expect(onSelectionChange).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rerender(
+        <WorldstateWorkbench
+          onSelectionChange={onSelectionChange}
+          presentationCommand={{
+            id: "presentation-command-unsupported-object",
+            type: "select_object",
+            objectId: HOME_MOVE_IDS.goal,
+          }}
+          session={session}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(root).toHaveAttribute(
+      "data-selected-object-id",
+      HOME_MOVE_IDS.budget,
+    );
+    expect(onSelectionChange).not.toHaveBeenCalled();
+  });
+
   it("keeps the selected kernel object stable while the projection changes", async () => {
     const user = userEvent.setup();
     const { session } = sessionHarness();
