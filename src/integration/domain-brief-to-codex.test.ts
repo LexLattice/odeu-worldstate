@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { compileCodexPrompt } from "@/adapters/codex/prompt";
-import { AgentBriefSchema } from "@/domain/schema";
+import { runCodexReplay } from "@/adapters/codex/replay";
+import { AgentRunRequestSchema } from "@/adapters/codex/schema";
+import {
+  AgentBriefSchema,
+  MOVING_COST_DELEGATION_PROFILE_ID,
+} from "@/domain";
 
 import { domainBriefToCodexRunRequest } from "./domain-brief-to-codex";
 
@@ -10,6 +15,7 @@ const domainBrief = AgentBriefSchema.parse({
   baseRevisionId: "rev-home-move-019",
   artifactBaseRef: "commit:008a1a7",
   targetNodeId: "task-compare-quotes",
+  delegationProfileId: MOVING_COST_DELEGATION_PROFILE_ID,
   goal: "Add a moving-cost comparison tool.",
   doneMeans: ["Two provider totals can be compared", "Focused checks pass"],
   unknowns: ["Compare recurring storage separately?"],
@@ -20,6 +26,7 @@ const domainBrief = AgentBriefSchema.parse({
       id: "task-compare-quotes",
       scopeId: "project-home-move",
       kind: "Task",
+      delegationProfileId: MOVING_COST_DELEGATION_PROFILE_ID,
       title: "Compare provider quotes",
       description: "Add a simple comparison to the local planning page.",
       visibility: "shared",
@@ -91,6 +98,9 @@ describe("domainBriefToCodexRunRequest", () => {
       requestId: "request-agent-001",
     });
     expect(request.brief.context.omittedCount).toBe(1);
+    expect(request.brief.delegationProfileId).toBe(
+      MOVING_COST_DELEGATION_PROFILE_ID,
+    );
     expect(JSON.stringify(request)).not.toContain("Household account details");
     expect(request.brief.unknowns).toContain("Compare recurring storage separately?");
     expect(request.brief.evidenceContract.blockIntegration).toBe(true);
@@ -107,6 +117,9 @@ describe("domainBriefToCodexRunRequest", () => {
 
     const prompt = compileCodexPrompt(request.brief);
     expect(prompt).not.toContain("Household account details");
+    expect(prompt).toContain(
+      `"delegationProfileId": "${MOVING_COST_DELEGATION_PROFILE_ID}"`,
+    );
     expect(prompt).toContain('"omittedContextCount": 1');
   });
 
@@ -119,5 +132,43 @@ describe("domainBriefToCodexRunRequest", () => {
         "request-agent-live-substitution",
       ),
     ).toThrow("bound to replay");
+  });
+
+  it("parses legacy unbound briefs for history but rejects every execution path", () => {
+    const { delegationProfileId: _domainProfile, ...legacyDomainInput } =
+      domainBrief;
+    void _domainProfile;
+    const legacyDomainBrief = AgentBriefSchema.parse(legacyDomainInput);
+    expect(legacyDomainBrief.delegationProfileId).toBeNull();
+    expect(() =>
+      domainBriefToCodexRunRequest(
+        legacyDomainBrief,
+        "run-legacy-unbound",
+        "replay",
+        "request-legacy-unbound",
+      ),
+    ).toThrow("ineligible for execution");
+
+    const currentRequest = domainBriefToCodexRunRequest(
+      domainBrief,
+      "run-current-profiled",
+      "replay",
+      "request-current-profiled",
+    );
+    const {
+      delegationProfileId: _codexProfile,
+      ...legacyCodexBriefInput
+    } = currentRequest.brief;
+    void _codexProfile;
+    const legacyRequest = AgentRunRequestSchema.parse({
+      ...currentRequest,
+      runId: "run-legacy-low-level",
+      requestId: "request-legacy-low-level",
+      brief: legacyCodexBriefInput,
+    });
+    expect(legacyRequest.brief.delegationProfileId).toBeNull();
+    expect(() => runCodexReplay(legacyRequest)).toThrow(
+      "ineligible for Codex execution",
+    );
   });
 });

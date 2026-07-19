@@ -202,8 +202,11 @@ export async function createLiveEvidenceGitFixture(input: {
     );
     changedPaths.push(LIVE_EVIDENCE_ARTIFACT_PATH, LIVE_EVIDENCE_SUPPORT_PATH);
   } else {
-    await writeFile(join(repositoryPath, "README.md"), "candidate\n");
-    changedPaths.push("README.md");
+    await writeFile(
+      join(repositoryPath, LIVE_EVIDENCE_SUPPORT_PATH),
+      input.supportModuleSource ?? TEST_LIVE_MOVING_COST_SUPPORT_SOURCE,
+    );
+    changedPaths.push(LIVE_EVIDENCE_SUPPORT_PATH);
   }
   if (input.candidatePackageTestScript !== undefined) {
     await writeFile(

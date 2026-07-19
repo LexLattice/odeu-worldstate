@@ -10,6 +10,7 @@ import {
   runLiveCodex,
   LiveCodexBlockedError,
   LiveCodexConfigurationError,
+  LiveCodexDeadlineExceededError,
   LiveCodexPreflightError,
 } from "./live";
 import {
@@ -61,6 +62,7 @@ export function codexFailure(error: unknown): AgentRunFailure {
   const modeMismatch = error instanceof CodexRequestModeMismatchError;
   const replayMismatch = error instanceof CodexReplayNotApplicableError;
   const workerBlocked = error instanceof LiveCodexBlockedError;
+  const workerTimedOut = error instanceof LiveCodexDeadlineExceededError;
   const effectiveMode = mode === "live" || mode === "replay" ? mode : null;
 
   return AgentRunFailureSchema.parse({
@@ -94,10 +96,12 @@ export function codexFailure(error: unknown): AgentRunFailure {
           ? preflightError.code
         : replayMismatch
         ? "replay_not_applicable"
-        : configurationFailure
+          : configurationFailure
           ? "live_not_configured"
           : workerBlocked
             ? "worker_blocked"
+            : workerTimedOut
+              ? "worker_timed_out"
           : "worker_failed",
       message: error instanceof Error ? error.message : "The Codex worker failed without a readable error.",
       issues: [],

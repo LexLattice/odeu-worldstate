@@ -1,16 +1,17 @@
 import { createHash } from "node:crypto";
 
+import {
+  HOME_MOVE_REGISTERED_SEMANTIC_BRIEF_DIGESTS,
+  HOME_MOVE_REPLAY_IDENTITY,
+} from "@/adapters/replay-evidence/bundle";
+
 import { assertCodexRequestMode } from "./mode";
 import type { AgentBrief, AgentRunRequest, AgentRunSuccess } from "./schema";
 
-const REPLAY_IDENTITY = "home-move-fixture-replay-v0";
 const REPLAY_START = "2026-07-16T09:12:00.000Z";
-const REGISTERED_SEMANTIC_BRIEF_DIGESTS = new Set([
-  // The deterministic full-domain fixture compiled by createPrivateProjectionFixture.
-  "sha256:07d4a43af261a69d17a0cd31e992315e69421dccde4d900fc66c1b0d9308c13b",
-  // The accepted browser placement compiled around its dynamic Task identity.
-  "sha256:3d696c21e13931f3e4b3a8122d3439626d14dd3ca229133d314d018608a676ed",
-]);
+const REGISTERED_SEMANTIC_BRIEF_DIGESTS = new Set<string>(
+  Object.values(HOME_MOVE_REGISTERED_SEMANTIC_BRIEF_DIGESTS),
+);
 
 export class CodexReplayNotApplicableError extends Error {
   constructor() {
@@ -42,6 +43,9 @@ export function semanticReplayBriefDigest(brief: AgentBrief): string {
     ]),
   );
   const semanticBrief = {
+    ...(brief.delegationProfileId === null
+      ? {}
+      : { delegationProfileId: brief.delegationProfileId }),
     goal: brief.goal,
     doneMeans: sorted(brief.doneMeans),
     environment: brief.environment,
@@ -103,7 +107,7 @@ export function runCodexReplay(request: AgentRunRequest): AgentRunSuccess {
     detail: requirement.command
       ? `Fixture evidence records a successful run of ${requirement.command}.`
       : "Fixture evidence records a successful focused verification.",
-    reference: `replay://${REPLAY_IDENTITY}/checks/${requirement.checkId}`,
+    reference: `replay://${HOME_MOVE_REPLAY_IDENTITY}/checks/${requirement.checkId}`,
   }));
 
   return {
@@ -113,7 +117,7 @@ export function runCodexReplay(request: AgentRunRequest): AgentRunSuccess {
       effectiveMode: "replay",
       status: "replayed",
       provider: "codex",
-      replayIdentity: REPLAY_IDENTITY,
+      replayIdentity: HOME_MOVE_REPLAY_IDENTITY,
       replayKind: "fixture",
     },
     events: [
@@ -164,7 +168,7 @@ export function runCodexReplay(request: AgentRunRequest): AgentRunSuccess {
             path: "demo/moving-costs.html",
             kind: "updated",
             summary: "A quote comparison form with editable provider totals.",
-            reference: `replay://${REPLAY_IDENTITY}/artifacts/moving-cost-comparison`,
+            reference: `replay://${HOME_MOVE_REPLAY_IDENTITY}/artifacts/moving-cost-comparison`,
           },
         ],
         claimedChecks: evidence,

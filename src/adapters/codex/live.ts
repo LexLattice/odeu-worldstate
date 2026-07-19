@@ -51,6 +51,62 @@ export class LiveCodexConfigurationError extends Error {
   }
 }
 
+export const LIVE_CODEX_PROVIDER_TIMEOUT_MS = 5 * 60 * 1_000;
+const MAX_TIMER_TIMEOUT_MS = 2_147_483_647;
+
+export class LiveCodexDeadlineExceededError extends Error {
+  constructor(
+    readonly timeoutMs: number,
+    options: ErrorOptions = {},
+  ) {
+    super(
+      `The live Codex worker exceeded its ${timeoutMs} ms provider deadline.`,
+      options,
+    );
+    this.name = "LiveCodexDeadlineExceededError";
+  }
+}
+
+function assertLiveCodexProviderTimeout(timeoutMs: number): void {
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs <= 0 ||
+    timeoutMs > MAX_TIMER_TIMEOUT_MS
+  ) {
+    throw new LiveCodexConfigurationError(
+      `The live Codex provider deadline must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS} milliseconds.`,
+    );
+  }
+}
+
+export async function withLiveCodexDeadline<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs = LIVE_CODEX_PROVIDER_TIMEOUT_MS,
+): Promise<T> {
+  assertLiveCodexProviderTimeout(timeoutMs);
+
+  const controller = new AbortController();
+  let expired = false;
+  const timer = setTimeout(() => {
+    expired = true;
+    controller.abort(new LiveCodexDeadlineExceededError(timeoutMs));
+  }, timeoutMs);
+  timer.unref();
+
+  try {
+    const result = await operation(controller.signal);
+    if (expired) throw new LiveCodexDeadlineExceededError(timeoutMs);
+    return result;
+  } catch (error) {
+    if (!expired || error instanceof LiveCodexDeadlineExceededError) {
+      throw error;
+    }
+    throw new LiveCodexDeadlineExceededError(timeoutMs, { cause: error });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export class LiveCodexPreflightError extends Error {
   constructor(
     readonly code:
@@ -709,13 +765,31 @@ async function preflightLiveRun(request: AgentRunRequest, preflightAt: Date) {
 
 type LiveCodexOptions = {
   now?: () => Date;
+  providerTimeoutMs?: number;
 };
+
+export async function finalizeLiveCodexWorkspaceLease(
+  workspaceLease: WorkspaceLease,
+  executionError: unknown,
+): Promise<void> {
+  if (executionError instanceof LiveCodexDeadlineExceededError) {
+    // The SDK only guarantees cancellation of its direct child. A tool descendant
+    // may still hold the worktree, so timeout quarantines the workspace until an
+    // operator verifies process quiescence and removes the retained marker.
+    await workspaceLease.retain();
+    return;
+  }
+  await workspaceLease.release();
+}
 
 export async function runLiveCodex(
   request: AgentRunRequest,
   options: LiveCodexOptions = {},
 ): Promise<AgentRunSuccess> {
   assertCodexRequestMode(request, "live");
+  if (options.providerTimeoutMs !== undefined) {
+    assertLiveCodexProviderTimeout(options.providerTimeoutMs);
+  }
   const now = options.now ?? (() => new Date());
   const {
     apiKey,
@@ -731,6 +805,7 @@ export async function runLiveCodex(
     workspaceLease,
   } = await preflightLiveRun(request, now());
 
+  let executionError: unknown;
   try {
     const startedAt = now().toISOString();
     const codex = new Codex({
@@ -749,62 +824,71 @@ export async function runLiveCodex(
       webSearchMode: "disabled",
       ...(model ? { model } : {}),
     });
-    const streamed = await thread.runStreamed(
-      compileCodexPrompt(request.brief),
-      {
-        outputSchema: z.toJSONSchema(CodexReportedResultSchema),
-      },
-    );
-    const items: ThreadItem[] = [];
-    let finalResponse = "";
-    let receivedRecorded = false;
-    let workingRecorded = false;
-    const lifecycle: AgentLifecycleEvent[] = [
-      {
-        sequence: 0,
-        status: "queued",
-        at: startedAt,
-        label: "Brief queued",
-        detail:
-          "The authorized brief entered the live Codex adapter after preflight checks.",
-      },
-    ];
+    const { items, finalResponse, lifecycle } = await withLiveCodexDeadline(
+      async (signal) => {
+        const streamed = await thread.runStreamed(
+          compileCodexPrompt(request.brief),
+          {
+            outputSchema: z.toJSONSchema(CodexReportedResultSchema),
+            signal,
+          },
+        );
+        const items: ThreadItem[] = [];
+        let finalResponse = "";
+        let receivedRecorded = false;
+        let workingRecorded = false;
+        const lifecycle: AgentLifecycleEvent[] = [
+          {
+            sequence: 0,
+            status: "queued",
+            at: startedAt,
+            label: "Brief queued",
+            detail:
+              "The authorized brief entered the live Codex adapter after preflight checks.",
+          },
+        ];
 
-    for await (const event of streamed.events) {
-      if (event.type === "thread.started" && !receivedRecorded) {
-        receivedRecorded = true;
-        lifecycle.push({
-          sequence: lifecycle.length,
-          status: "received",
-          at: now().toISOString(),
-          label: "Brief received",
-          detail: "The Codex SDK reported that the worker thread started.",
-        });
-      } else if (
-        (event.type === "item.started" || event.type === "item.completed") &&
-        !workingRecorded
-      ) {
-        workingRecorded = true;
-        lifecycle.push({
-          sequence: lifecycle.length,
-          status: "working",
-          at: now().toISOString(),
-          label: "Working",
-          detail: "The Codex SDK emitted the first worker item.",
-        });
-      }
+        for await (const event of streamed.events) {
+          if (event.type === "thread.started" && !receivedRecorded) {
+            receivedRecorded = true;
+            lifecycle.push({
+              sequence: lifecycle.length,
+              status: "received",
+              at: now().toISOString(),
+              label: "Brief received",
+              detail: "The Codex SDK reported that the worker thread started.",
+            });
+          } else if (
+            (event.type === "item.started" ||
+              event.type === "item.completed") &&
+            !workingRecorded
+          ) {
+            workingRecorded = true;
+            lifecycle.push({
+              sequence: lifecycle.length,
+              status: "working",
+              at: now().toISOString(),
+              label: "Working",
+              detail: "The Codex SDK emitted the first worker item.",
+            });
+          }
 
-      if (event.type === "item.completed") {
-        items.push(event.item);
-        if (event.item.type === "agent_message") {
-          finalResponse = event.item.text;
+          if (event.type === "item.completed") {
+            items.push(event.item);
+            if (event.item.type === "agent_message") {
+              finalResponse = event.item.text;
+            }
+          } else if (event.type === "turn.failed") {
+            throw new Error(event.error.message);
+          } else if (event.type === "error") {
+            throw new Error(event.message);
+          }
         }
-      } else if (event.type === "turn.failed") {
-        throw new Error(event.error.message);
-      } else if (event.type === "error") {
-        throw new Error(event.message);
-      }
-    }
+
+        return { items, finalResponse, lifecycle };
+      },
+      options.providerTimeoutMs,
+    );
 
     let reported: z.infer<typeof CodexReportedResultSchema>;
     try {
@@ -937,7 +1021,10 @@ export async function runLiveCodex(
         artifactCandidate,
       },
     });
+  } catch (error) {
+    executionError = error;
+    throw error;
   } finally {
-    await workspaceLease.release();
+    await finalizeLiveCodexWorkspaceLease(workspaceLease, executionError);
   }
 }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -6,8 +7,10 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { semanticReplayBriefDigest } from "@/adapters/codex/replay";
+import { AgentBriefSchema as CodexAgentBriefSchema } from "@/adapters/codex/schema";
 import { createPrivateProjectionFixture } from "@/fixtures";
 import { domainBriefToCodexRunRequest } from "@/integration/domain-brief-to-codex";
+import { assertReplayEvidenceResponseMatchesRequest } from "@/integration/replay-evidence-validation";
 
 import {
   HOME_MOVE_REPLAY_ARTIFACT_BYTE_LENGTH,
@@ -20,6 +23,14 @@ import {
   HOME_MOVE_REPLAY_EVIDENCE_RUNNER_ID,
   HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
   HOME_MOVE_REPLAY_IDENTITY,
+  HOME_MOVE_REPLAY_EVIDENCE_V0_ARTIFACT_EVIDENCE_REF,
+  HOME_MOVE_REPLAY_EVIDENCE_V0_BUNDLE_ID,
+  HOME_MOVE_REPLAY_EVIDENCE_V0_MANIFEST,
+  HOME_MOVE_REPLAY_EVIDENCE_V0_MANIFEST_DIGEST,
+  HOME_MOVE_REPLAY_EVIDENCE_V0_TEST_EVIDENCE_REF_PREFIX,
+  HOME_MOVE_REPLAY_EVIDENCE_V0_VERIFIER_IDENTITY,
+  HOME_MOVE_REGISTERED_V0_SEMANTIC_BRIEF_DIGESTS,
+  HOME_MOVE_REPLAY_V0_IDENTITY,
   HOME_MOVE_REPLAY_SUPPORT_PATH,
 } from "./bundle";
 import {
@@ -64,6 +75,110 @@ function registeredRequest() {
 }
 
 describe("verifyReplayEvidence", () => {
+  it("retains the exact v0 manifest and re-attests v0 exchanges without executing them", async () => {
+    const stableJson = (value: unknown): string => {
+      if (value === null || typeof value !== "object") {
+        return JSON.stringify(value);
+      }
+      if (Array.isArray(value)) {
+        return `[${value.map((item) => stableJson(item)).join(",")}]`;
+      }
+      const record = value as Record<string, unknown>;
+      return `{${Object.keys(record)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+        .join(",")}}`;
+    };
+    expect(
+      `sha256:${createHash("sha256")
+        .update(stableJson(HOME_MOVE_REPLAY_EVIDENCE_V0_MANIFEST))
+        .digest("hex")}`,
+    ).toBe(HOME_MOVE_REPLAY_EVIDENCE_V0_MANIFEST_DIGEST);
+
+    const currentRequest = registeredRequest();
+    const currentCodexBrief = domainBriefToCodexRunRequest(
+      createPrivateProjectionFixture().brief,
+      "run-historical-digest",
+      "replay",
+      "request-historical-digest",
+    ).brief;
+    const {
+      delegationProfileId: _currentProfileId,
+      ...unboundCodexBriefInput
+    } = currentCodexBrief;
+    void _currentProfileId;
+    expect(
+      semanticReplayBriefDigest(
+        CodexAgentBriefSchema.parse({
+          ...unboundCodexBriefInput,
+          doneMeans: unboundCodexBriefInput.doneMeans.slice(0, 2),
+          constraints: [],
+          actions: {
+            ...unboundCodexBriefInput.actions,
+            allowed: [
+              "Read and edit files inside the disposable demo workspace",
+              "Run focused tests",
+            ],
+          },
+        }),
+      ),
+    ).toBe(HOME_MOVE_REGISTERED_V0_SEMANTIC_BRIEF_DIGESTS.privateFixture);
+    const currentResponse = await verifyReplayEvidence(currentRequest, {
+      now: () => new Date("2026-07-17T15:59:59.000Z"),
+    });
+    const historicalRequest = ReplayEvidenceRequestSchema.parse({
+      ...currentRequest,
+      replayIdentity: HOME_MOVE_REPLAY_V0_IDENTITY,
+      semanticBriefDigest:
+        HOME_MOVE_REGISTERED_V0_SEMANTIC_BRIEF_DIGESTS.privateFixture,
+    });
+    const historicalResponse = ReplayEvidenceSuccessSchema.parse({
+      ...currentResponse,
+      verifier: {
+        identity: HOME_MOVE_REPLAY_EVIDENCE_V0_VERIFIER_IDENTITY,
+        version: 1,
+        kind: "independent_fixture",
+      },
+      bindings: {
+        ...currentResponse.bindings,
+        replayIdentity: historicalRequest.replayIdentity,
+        semanticBriefDigest: historicalRequest.semanticBriefDigest,
+      },
+      bundle: {
+        bundleId: HOME_MOVE_REPLAY_EVIDENCE_V0_BUNDLE_ID,
+        version: 1,
+        manifestDigest: HOME_MOVE_REPLAY_EVIDENCE_V0_MANIFEST_DIGEST,
+        artifactCount: HOME_MOVE_REPLAY_EVIDENCE_ARTIFACT_COUNT,
+      },
+      observations: currentResponse.observations.map((observation) => ({
+        ...observation,
+        evidenceRef:
+          observation.artifact !== null
+            ? HOME_MOVE_REPLAY_EVIDENCE_V0_ARTIFACT_EVIDENCE_REF
+            : `${HOME_MOVE_REPLAY_EVIDENCE_V0_TEST_EVIDENCE_REF_PREFIX}${encodeURIComponent(
+                observation.requirementId,
+              )}/${HOME_MOVE_REPLAY_EVIDENCE_RUNNER_ID}`,
+        artifact:
+          observation.artifact === null
+            ? null
+            : {
+                ...observation.artifact,
+                manifestDigest: HOME_MOVE_REPLAY_EVIDENCE_V0_MANIFEST_DIGEST,
+              },
+      })),
+    });
+
+    expect(() =>
+      assertReplayEvidenceResponseMatchesRequest({
+        request: historicalRequest,
+        response: historicalResponse,
+      }),
+    ).not.toThrow();
+    await expect(verifyReplayEvidence(historicalRequest)).rejects.toBeInstanceOf(
+      ReplayEvidenceNotApplicableError,
+    );
+  });
+
   it("independently observes the digest-pinned artifact and fixed vectors", async () => {
     const result = await verifyReplayEvidence(registeredRequest(), {
       now: () => new Date("2026-07-17T16:00:00.000Z"),

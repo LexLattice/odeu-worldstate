@@ -121,6 +121,8 @@ const PUBLIC_CODEX_FAILURE_MESSAGES: Record<
   workspace_dirty: "The live workspace is not clean enough to execute safely.",
   workspace_private_data: "The live workspace contains unsupported private data.",
   worker_blocked: "The live worker returned a blocked result.",
+  worker_timed_out:
+    "The live worker exceeded its configured deadline. Its workspace is quarantined for operator inspection.",
   worker_failed: "The agent worker failed.",
 };
 
@@ -145,6 +147,8 @@ function responseStatus(response: AgentRunResponse): number {
       ? 403
       : code === "worker_failed"
         ? 500
+        : code === "worker_timed_out"
+          ? 504
         : 409;
 }
 

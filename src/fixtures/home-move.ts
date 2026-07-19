@@ -8,6 +8,8 @@ import {
   deltaProposedEvent,
   evidenceValidationEvent,
   fingerprint,
+  MOVING_COST_DELEGATION_PROFILE_ID,
+  MOVING_COST_DELEGATION_PROFILE,
   projectAgentBrief,
   reduceWorldstateLedger,
   runAuthorizedEvent,
@@ -295,6 +297,7 @@ function placementDelta(input: {
       {
         op: "node.add",
         node: baseNode(HOME_MOVE_IDS.compareQuotes, "Task", "Compare provider quotes", {
+          delegationProfileId: MOVING_COST_DELEGATION_PROFILE_ID,
           description: "Add a small moving-cost comparison tool to the local planning page.",
           knowledge: { standing: "draft", freshness: "current" },
           governance: { standing: "adopted", approval: "granted" },
@@ -650,12 +653,14 @@ function addBrief(
   } = {},
 ): { ledger: WorldstateLedger; brief: AgentBrief } {
   const state = reduceWorldstateLedger(ledger);
+  const profile = MOVING_COST_DELEGATION_PROFILE;
   const brief = compileAgentBrief(state, {
     id: HOME_MOVE_IDS.brief,
     executionMode: input.executionMode ?? "replay",
     baseRevisionId: state.canonical.head.id,
     artifactBaseRef: input.artifactBaseRef ?? "git:demo-base-001",
     targetNodeId: HOME_MOVE_IDS.compareQuotes,
+    delegationProfileId: profile.id,
     shareNodeIds: [
       HOME_MOVE_IDS.projectNode,
       HOME_MOVE_IDS.goal,
@@ -664,38 +669,23 @@ function addBrief(
       HOME_MOVE_IDS.compareQuotes,
       HOME_MOVE_IDS.storageQuestion,
     ],
-    goal: "Add a simple moving-cost comparison tool to the demo planning page.",
-    doneMeans: [
-      "A user can enter at least two provider quotes and compare totals.",
-      "Focused tests for total calculation pass.",
-    ],
+    goal: profile.goal,
+    doneMeans: profile.doneMeans,
     unknowns: ["Recurring storage costs may need a separate comparison."],
-    constraints: [],
-    expectedArtifacts: ["demo/moving-costs.html"],
-    environment: "Disposable local demo workspace",
-    agentProfile: "Codex, repository-local implementation",
-    allowedActions: ["Read and edit files inside the disposable demo workspace", "Run focused tests"],
-    deniedActions: ["Publish externally", "Read omitted worldstate context"],
-    confirmationRequired: ["Any action outside the disposable workspace"],
+    constraints: profile.constraints,
+    expectedArtifacts: profile.expectedArtifacts,
+    environment: profile.environment,
+    agentProfile: profile.agentProfile,
+    allowedActions: profile.allowedActions,
+    deniedActions: profile.deniedActions,
+    confirmationRequired: profile.confirmationRequired,
     evidenceContract: {
-      requirements: [
-        {
-          id: "requirement-focused-tests",
-          label: "Focused moving-cost calculation tests pass",
-          kind: "test",
-          command: "npm test -- moving-cost",
-          required: true,
-        },
-        {
-          id: "requirement-artifact-change",
-          label: "The planning-page artifact change is addressable",
-          kind: "artifact",
-          required: true,
-        },
-      ],
-      policy: { blockIntegration: true },
+      requirements: profile.evidenceContract.requirements.map((requirement) => ({
+        ...requirement,
+      })),
+      policy: { ...profile.evidenceContract.policy },
     },
-    escalationPath: "Return blocked with the exact missing authorization or information.",
+    escalationPath: profile.escalationPath,
   });
   return {
     brief,

@@ -12,6 +12,7 @@ import {
   fingerprint,
   sourceCapturedEvent,
   stableStringify,
+  unexpectedDelegationProfileChangePaths,
   type Actor,
   type AgentBrief,
   type AgentRun,
@@ -167,6 +168,11 @@ export function compileLiveEvidenceRequest(input: {
 }): LiveEvidenceRequest {
   const { run, brief, closure, codexExchange } = input;
   const issues: string[] = [];
+  if (brief.delegationProfileId === null) {
+    issues.push(
+      "The live brief has no registered delegation profile for candidate validation.",
+    );
+  }
   equalIssue(issues, "run.mode", run.mode, "live");
   equalIssue(issues, "brief.executionMode", brief.executionMode, "live");
   equalIssue(issues, "run.briefId", run.briefId, brief.id);
@@ -284,6 +290,21 @@ export function compileLiveEvidenceRequest(input: {
     closure.artifactCandidateCommit,
     candidate.git.candidateCommit,
   );
+  const unexpectedChangedPaths = brief.delegationProfileId
+    ? unexpectedDelegationProfileChangePaths(
+        brief.delegationProfileId,
+        candidate.manifest.entries.map((entry) => entry.path),
+      )
+    : [];
+  if (!brief.delegationProfileId) {
+    issues.push(
+      "The live brief has no registered delegation profile for candidate validation.",
+    );
+  } else if (unexpectedChangedPaths.length > 0) {
+    issues.push(
+      `The signed staged candidate changes paths outside the exact ${brief.delegationProfileId} allowed-change envelope: ${unexpectedChangedPaths.join(", ")}.`,
+    );
+  }
   for (const expectedArtifact of brief.expectedArtifacts) {
     const changed = candidate.manifest.entries.some(
       (entry) => entry.path === expectedArtifact && entry.status !== "deleted",

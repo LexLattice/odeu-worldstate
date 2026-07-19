@@ -8,6 +8,10 @@ import {
   type AgentRunResponse,
 } from "@/adapters/codex/schema";
 import {
+  HOME_MOVE_REPLAY_IDENTITY,
+  HOME_MOVE_REPLAY_V0_IDENTITY,
+} from "@/adapters/replay-evidence/bundle";
+import {
   AgentBriefSchema as DomainAgentBriefSchema,
   AgentRunSchema as DomainAgentRunSchema,
   closureStagedEvent,
@@ -22,7 +26,7 @@ import {
   type SourceRecord,
 } from "@/domain";
 
-import { domainBriefToCodexRunRequest } from "./domain-brief-to-codex";
+import { projectDomainBriefToCodexRunRequestForAttestation } from "./domain-brief-to-codex";
 
 export const CodexRunAttemptSchema = z
   .object({
@@ -158,7 +162,7 @@ function immutableBindingIssues(input: {
     request.brief.artifactBaseRef,
     run.artifactBaseRef,
   );
-  const expectedRequest = domainBriefToCodexRunRequest(
+  const expectedRequest = projectDomainBriefToCodexRunRequestForAttestation(
     brief,
     request.runId,
     request.mode,
@@ -298,6 +302,16 @@ export function assertCodexRunResponseMatchesRun(input: {
       response.runtime.status,
       expectedRuntimeStatus,
     );
+    if (bindings.run.mode === "replay") {
+      equal(
+        "response.runtime.replayIdentity",
+        response.runtime.replayIdentity,
+        bindings.request.brief.delegationProfileId === null
+          ? HOME_MOVE_REPLAY_V0_IDENTITY
+          : HOME_MOVE_REPLAY_IDENTITY,
+      );
+      equal("response.runtime.replayKind", response.runtime.replayKind, "fixture");
+    }
     equal("response.closure.runId", response.closure.runId, bindings.run.id);
     equal("response.closure.briefId", response.closure.briefId, bindings.brief.id);
     equal(

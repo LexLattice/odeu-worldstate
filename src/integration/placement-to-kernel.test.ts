@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { placeSource } from "@/adapters/manager/gateway";
 import type { PlacementSuccessResponse } from "@/adapters/manager/schema";
-import { WorldstateDeltaSchema } from "@/domain/schema";
+import {
+  MOVING_COST_DELEGATION_PROFILE_ID,
+  WorldstateDeltaSchema,
+} from "@/domain";
 
 import { placementResponseToKernelDelta } from "./placement-to-kernel";
 
@@ -60,10 +63,32 @@ describe("placementResponseToKernelDelta", () => {
     expect(delta?.operations[0]).toMatchObject({
       op: "node.add",
       node: {
+        delegationProfileId: MOVING_COST_DELEGATION_PROFILE_ID,
         governance: { standing: "adopted", approval: "granted" },
         sourceRefs: [request.source.sourceId],
       },
     });
+  });
+
+  it("rejects a hidden delegation-profile substitution", async () => {
+    const placement = await placeSource(request, {
+      environment: { ODEU_MANAGER_MODE: "fixture" },
+    });
+    expect(placement.body.ok).toBe(true);
+    const tampered = structuredClone(
+      placement.body as PlacementSuccessResponse,
+    );
+    const nodeOperation = tampered.delta?.operations.find(
+      (operation) => operation.op === "node.add",
+    );
+    if (!nodeOperation) {
+      throw new Error("Fixture did not return its proposed node operation.");
+    }
+    nodeOperation.node.delegationProfileId = null;
+
+    expect(() => placementResponseToKernelDelta(tampered)).toThrow(
+      "visible proposed node",
+    );
   });
 
   it("does not invent a delta when the manager asks for clarification", async () => {

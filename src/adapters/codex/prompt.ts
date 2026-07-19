@@ -5,6 +5,7 @@ export function compileCodexPrompt(brief: AgentBrief): string {
     briefId: brief.briefId,
     sourceRevisionId: brief.sourceRevisionId,
     artifactBaseRef: brief.artifactBaseRef,
+    delegationProfileId: brief.delegationProfileId,
     goal: brief.goal,
     doneMeans: brief.doneMeans,
     environment: brief.environment,

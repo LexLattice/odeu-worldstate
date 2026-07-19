@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { MOVING_COST_DELEGATION_PROFILE_ID } from "@/domain";
+
 import { placeSource } from "./gateway";
+import type { PlacementParser } from "./live";
 import type {
   ManagerPlacementInterpretation,
   PlacementRequest,
@@ -52,6 +55,7 @@ const liveInterpretation: ManagerPlacementInterpretation = {
   locationLabel: "Budget",
   breadcrumb: ["Plan our home move", "Budget"],
   proposedKind: "Task",
+  delegationProfileId: MOVING_COST_DELEGATION_PROFILE_ID,
   proposedTitle: "Compare provider quotes",
   proposedSummary: "Build a focused comparison for moving-provider costs.",
   rationale: "The source asks for actionable budget comparison work.",
@@ -109,6 +113,9 @@ describe("manager placement gateway", () => {
       responseId: null,
     });
     expect(first.body.receipt.location.targetNodeId).toBe("area-budget");
+    expect(first.body.receipt.proposed.delegationProfileId).toBe(
+      MOVING_COST_DELEGATION_PROFILE_ID,
+    );
     expect(first.body.receipt.baseRevisionId).toBe(request.baseRevisionId);
     expect(first.body.delta).toMatchObject({
       baseRevisionId: request.baseRevisionId,
@@ -118,7 +125,10 @@ describe("manager placement gateway", () => {
     });
     expect(first.body.delta?.operations[0]).toMatchObject({
       op: "node.add",
-      node: { title: "Compare provider quotes" },
+      node: {
+        delegationProfileId: MOVING_COST_DELEGATION_PROFILE_ID,
+        title: "Compare provider quotes",
+      },
     });
     expect(Object.isFrozen(first.body.delta)).toBe(true);
     expect(Object.isFrozen(first.body.delta?.operations)).toBe(true);
@@ -291,10 +301,14 @@ describe("manager placement gateway", () => {
       liveParser,
     });
 
-    expect(liveParser).toHaveBeenCalledWith({
-      request,
-      model: "gpt-5.6",
-    });
+    expect(liveParser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request,
+        model: "gpt-5.6",
+        signal: expect.any(AbortSignal),
+        timeoutMs: 120_000,
+      }),
+    );
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       ok: true,
@@ -337,6 +351,86 @@ describe("manager placement gateway", () => {
       },
     });
   });
+
+  it("aborts an over-deadline provider call and preserves a typed retryable failure", async () => {
+    const liveParser = vi.fn(
+      ({ signal }: Parameters<PlacementParser>[0]) =>
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        }),
+    );
+
+    const result = await placeSource(request, {
+      environment: { ODEU_MANAGER_MODE: "live" },
+      liveParser,
+      liveTimeoutMs: 5,
+    });
+
+    expect(liveParser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        timeoutMs: 5,
+      }),
+    );
+    expect(result.status).toBe(504);
+    expect(result.body).toMatchObject({
+      ok: false,
+      manager: {
+        effectiveMode: "live",
+        status: "failed",
+        provider: "openai",
+      },
+      sourcePreserved: true,
+      error: {
+        code: "provider_timed_out",
+        retryable: true,
+      },
+    });
+  });
+
+  it("returns at the host deadline even when a parser ignores cancellation", async () => {
+    const liveParser = vi.fn(() => new Promise<never>(() => undefined));
+
+    const result = await placeSource(request, {
+      environment: { ODEU_MANAGER_MODE: "live" },
+      liveParser,
+      liveTimeoutMs: 5,
+    });
+
+    expect(result.status).toBe(504);
+    expect(result.body).toMatchObject({
+      ok: false,
+      sourcePreserved: true,
+      error: { code: "provider_timed_out", retryable: true },
+    });
+  });
+
+  it.each([0, 2_147_483_648])(
+    "rejects invalid provider deadline %s before dispatch",
+    async (liveTimeoutMs) => {
+      const liveParser = vi.fn();
+
+      const result = await placeSource(request, {
+        environment: { ODEU_MANAGER_MODE: "live" },
+        liveParser,
+        liveTimeoutMs,
+      });
+
+      expect(liveParser).not.toHaveBeenCalled();
+      expect(result.status).toBe(503);
+      expect(result.body).toMatchObject({
+        ok: false,
+        manager: { effectiveMode: null, status: "unavailable" },
+        sourcePreserved: true,
+        error: {
+          code: "live_configuration_invalid",
+          retryable: false,
+        },
+      });
+    },
+  );
 
   it("fails closed when the model references a node outside the projection", async () => {
     const result = await placeSource(request, {

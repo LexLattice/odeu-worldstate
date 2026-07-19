@@ -18,6 +18,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "smoke:application:live": "node scripts/application-live-readiness.mjs",
     "smoke:codex:local-session": "node scripts/codex-local-session-smoke.mjs",
     "check": "npm run lint && npm run typecheck && npm run test",
     "verify": "npm run check && npm run build && npm run test:e2e"

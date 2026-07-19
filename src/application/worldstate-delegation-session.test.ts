@@ -15,6 +15,7 @@ import {
   HOME_MOVE_REPLAY_EVIDENCE_RUNNER_ID,
   HOME_MOVE_REPLAY_EVIDENCE_TEST_COMMAND,
   HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
+  HOME_MOVE_REPLAY_IDENTITY,
   HOME_MOVE_REPLAY_TEST_EVIDENCE_REF_PREFIX,
   ReplayEvidenceResponseSchema,
   type ReplayEvidenceRequest,
@@ -117,14 +118,14 @@ function passingReplayEvidence(
     status: "passed",
     verifier: {
       identity: HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
-      version: 1,
+      version: 2,
       kind: "independent_fixture",
     },
     bindings,
     observedAt: "2026-07-17T14:00:01.000Z",
     bundle: {
       bundleId: HOME_MOVE_REPLAY_EVIDENCE_BUNDLE_ID,
-      version: 1,
+      version: 2,
       manifestDigest: HOME_MOVE_REPLAY_EVIDENCE_MANIFEST_DIGEST,
       artifactCount: HOME_MOVE_REPLAY_EVIDENCE_ARTIFACT_COUNT,
     },
@@ -387,7 +388,7 @@ describe("durable browser delegation session", () => {
       runtime: {
         effectiveMode: "replay",
         status: "replayed",
-        replayIdentity: "home-move-fixture-replay-v0",
+        replayIdentity: HOME_MOVE_REPLAY_IDENTITY,
       },
     });
 

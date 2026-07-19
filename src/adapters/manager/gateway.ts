@@ -2,8 +2,12 @@ import { interpretFixturePlacement } from "./fixture";
 import {
   createOpenAIPlacementParser,
   interpretLivePlacement,
+  LIVE_PLACEMENT_PROVIDER_TIMEOUT_MS,
+  LivePlacementConfigurationError,
+  LivePlacementDeadlineExceededError,
   LivePlacementOutputError,
   type PlacementParser,
+  withLivePlacementDeadline,
 } from "./live";
 import {
   freezePlacementArtifact,
@@ -33,6 +37,7 @@ export interface ManagerEnvironment {
 export interface PlacementGatewayDependencies {
   environment?: ManagerEnvironment;
   liveParser?: PlacementParser;
+  liveTimeoutMs?: number;
 }
 
 export interface PlacementGatewayResult {
@@ -152,7 +157,16 @@ async function runPlacement(
   try {
     const parser =
       dependencies.liveParser ?? createOpenAIPlacementParser(apiKey as string);
-    const liveResult = await interpretLivePlacement(request, model, parser);
+    const timeoutMs =
+      dependencies.liveTimeoutMs ?? LIVE_PLACEMENT_PROVIDER_TIMEOUT_MS;
+    const liveResult = await withLivePlacementDeadline(
+      (signal) =>
+        interpretLivePlacement(request, model, parser, {
+          signal,
+          timeoutMs,
+        }),
+      timeoutMs,
+    );
     responseId = liveResult.responseId;
     responseModel = liveResult.model;
     const proposal = materializePlacementProposal(
@@ -174,6 +188,37 @@ async function runPlacement(
 
     return { status: 200, body: freezePlacementArtifact(body) };
   } catch (error) {
+    if (error instanceof LivePlacementConfigurationError) {
+      return errorResult({
+        status: 503,
+        requestedMode,
+        effectiveMode: null,
+        runtimeStatus: "unavailable",
+        provider: "openai",
+        model,
+        responseId,
+        code: "live_configuration_invalid",
+        message: error.message,
+        retryable: false,
+      });
+    }
+
+    if (error instanceof LivePlacementDeadlineExceededError) {
+      return errorResult({
+        status: 504,
+        requestedMode,
+        effectiveMode: "live",
+        runtimeStatus: "failed",
+        provider: "openai",
+        model,
+        responseId,
+        code: "provider_timed_out",
+        message:
+          "The live placement request exceeded its configured provider deadline. The captured source remains available for retry or manual placement.",
+        retryable: true,
+      });
+    }
+
     if (error instanceof LivePlacementOutputError) {
       return errorResult({
         status: 502,

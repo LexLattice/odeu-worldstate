@@ -25,6 +25,7 @@ import {
   verifyArtifactCandidateReceipt,
 } from "@/adapters/artifact-promotion/server";
 import { HOME_MOVE_REPLAY_EVIDENCE_VECTORS } from "@/adapters/replay-evidence/bundle";
+import { unexpectedDelegationProfileChangePaths } from "@/domain";
 
 import {
   LIVE_EVIDENCE_ARTIFACT_PATH,
@@ -270,6 +271,21 @@ function assertReceiptBindings(request: LiveEvidenceRequest): void {
     throw new LiveEvidenceVerificationFailedError(
       "The live evidence request is not bound to the signed candidate.",
       issues,
+    );
+  }
+}
+
+function assertRegisteredChangedPathEnvelope(
+  metadata: ArtifactCandidateMetadata,
+): void {
+  const unexpected = unexpectedDelegationProfileChangePaths(
+    LIVE_EVIDENCE_HARNESS_PROFILE_ID,
+    metadata.manifest.entries.map((entry) => entry.path),
+  );
+  if (unexpected.length > 0) {
+    throw new LiveEvidenceVerificationFailedError(
+      `The signed candidate manifest exceeds the exact ${LIVE_EVIDENCE_HARNESS_PROFILE_ID} allowed-change envelope.`,
+      unexpected.map((path) => `Unexpected changed path: ${path}`),
     );
   }
 }
@@ -1415,6 +1431,7 @@ export async function verifyLiveEvidence(
   }
 
   const metadata = receipt.metadata;
+  assertRegisteredChangedPathEnvelope(metadata);
   const configured = configuredRepository(metadata.repositoryId, options.repositories);
   const repositoryPath = await trustedDirectory(
     configured.repositoryPath,

@@ -1446,6 +1446,24 @@ function PlacementReceipt({ placement }: { placement: PlacementSurface }) {
               {placement.proposedKind} · {placement.proposedTitle}
             </dd>
           </div>
+          <div data-delegation-profile-id={placement.delegationProfileId ?? "none"}>
+            <dt>
+              {placement.state === "adopted"
+                ? "Accepted delegation profile"
+                : "Delegation profile proposal"}
+            </dt>
+            <dd>
+              {placement.delegationProfileId
+                ? `${placement.delegationProfileId}${
+                    placement.state === "adopted"
+                      ? " · accepted, not run authority"
+                      : ""
+                  }`
+                : placement.state === "adopted"
+                  ? "None accepted · no executable delegation"
+                  : "None · no registered delegation"}
+            </dd>
+          </div>
           <div>
             <dt>Why here</dt>
             <dd>{placement.rationale ?? "No rationale was returned."}</dd>
@@ -2069,6 +2087,13 @@ export function WorkPanel({
               <div>
                 <dt>Agent profile</dt>
                 <dd>{brief.agentProfile}</dd>
+              </div>
+              <div data-delegation-profile-id={brief.delegationProfileId ?? "none"}>
+                <dt>Delegation contract</dt>
+                <dd>
+                  {brief.delegationProfileId ??
+                    "Legacy unbound brief · not executable"}
+                </dd>
               </div>
               <div>
                 <dt>Environment</dt>

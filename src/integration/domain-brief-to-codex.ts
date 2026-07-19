@@ -40,7 +40,7 @@ function sharedKind(kind: NodeKind): SharedKind {
  * omissions remain available to the human preview; compileCodexPrompt performs
  * the final deny-by-omission projection before provider execution.
  */
-export function domainBriefToCodexRunRequest(
+function projectDomainBriefToCodexRunRequest(
   brief: DomainAgentBrief,
   runId: string,
   mode: "live" | "replay",
@@ -66,6 +66,7 @@ export function domainBriefToCodexRunRequest(
       briefId: brief.id,
       sourceRevisionId: brief.baseRevisionId,
       artifactBaseRef: brief.artifactBaseRef,
+      delegationProfileId: projected.delegationProfileId,
       goal: projected.goal,
       doneMeans: projected.doneMeans,
       environment: projected.environment,
@@ -107,4 +108,35 @@ export function domainBriefToCodexRunRequest(
       escalationPath: projected.escalationPath,
     },
   });
+}
+
+/**
+ * Produces a new executable request. Historical format-v1 briefs without a
+ * host-owned profile remain readable but cannot cross this authority boundary.
+ */
+export function domainBriefToCodexRunRequest(
+  brief: DomainAgentBrief,
+  runId: string,
+  mode: "live" | "replay",
+  requestId: string,
+): AgentRunRequest {
+  if (brief.delegationProfileId === null) {
+    throw new Error(
+      `Legacy brief ${brief.id} has no host-registered delegation profile and is ineligible for execution.`,
+    );
+  }
+  return projectDomainBriefToCodexRunRequest(brief, runId, mode, requestId);
+}
+
+/**
+ * Reconstructs an immutable historical request for evidence comparison only.
+ * Every Codex execution adapter independently rejects a null profile.
+ */
+export function projectDomainBriefToCodexRunRequestForAttestation(
+  brief: DomainAgentBrief,
+  runId: string,
+  mode: "live" | "replay",
+  requestId: string,
+): AgentRunRequest {
+  return projectDomainBriefToCodexRunRequest(brief, runId, mode, requestId);
 }

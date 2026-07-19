@@ -24,4 +24,18 @@ describe("live Codex workspace lease", () => {
     await next.release();
     await rm(leaseRoot, { recursive: true, force: true });
   });
+
+  it("keeps a retained lease fail-closed for operator inspection", async () => {
+    const workspace = `/tmp/odeu-workspace-${randomUUID()}`;
+    const leaseRoot = await mkdtemp(join(tmpdir(), "odeu-lease-root-"));
+    const lease = await acquireWorkspaceLease(workspace, leaseRoot);
+
+    await lease.retain();
+    await lease.release();
+
+    await expect(acquireWorkspaceLease(workspace, leaseRoot)).rejects.toBeInstanceOf(
+      WorkspaceLeaseUnavailableError,
+    );
+    await rm(leaseRoot, { recursive: true, force: true });
+  });
 });

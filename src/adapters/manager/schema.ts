@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { DelegationProfileIdSchema } from "@/domain";
+
 export const ManagerModeSchema = z.enum(["fixture", "live"]);
 export type ManagerMode = z.infer<typeof ManagerModeSchema>;
 
@@ -160,6 +162,7 @@ export const ManagerPlacementInterpretationSchema = z
     locationLabel: z.string().trim().min(1).max(300),
     breadcrumb: z.array(z.string().trim().min(1).max(300)).max(12),
     proposedKind: WorldstateNodeKindSchema,
+    delegationProfileId: DelegationProfileIdSchema.nullable(),
     proposedTitle: z.string().trim().min(1).max(300),
     proposedSummary: z
       .string()
@@ -220,6 +223,17 @@ export const ManagerPlacementInterpretationSchema = z
         path: ["locationTargetNodeId"],
       });
     }
+
+    if (
+      interpretation.delegationProfileId !== null &&
+      interpretation.proposedKind !== "Task"
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "only a Task may bind a registered delegation profile",
+        path: ["delegationProfileId"],
+      });
+    }
   });
 
 export type ManagerPlacementInterpretation = z.infer<
@@ -246,6 +260,7 @@ export const PlacementReceiptSchema = z
       .object({
         nodeId: IdentifierSchema,
         kind: WorldstateNodeKindSchema,
+        delegationProfileId: DelegationProfileIdSchema.nullable().default(null),
         title: z.string().trim().min(1).max(300),
         summary: z
           .string()
@@ -295,6 +310,16 @@ export const PlacementReceiptSchema = z
         path: ["clarificationQuestion"],
       });
     }
+    if (
+      receipt.proposed.delegationProfileId !== null &&
+      receipt.proposed.kind !== "Task"
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "only a Task may bind a registered delegation profile",
+        path: ["proposed", "delegationProfileId"],
+      });
+    }
   });
 
 const NodeAddOperationSchema = z
@@ -305,6 +330,7 @@ const NodeAddOperationSchema = z
       .object({
         id: IdentifierSchema,
         kind: WorldstateNodeKindSchema,
+        delegationProfileId: DelegationProfileIdSchema.nullable().default(null),
         scopeId: IdentifierSchema,
         title: z.string().trim().min(1).max(300),
         summary: z
@@ -314,7 +340,16 @@ const NodeAddOperationSchema = z
           .max(MANAGER_PROPOSED_SUMMARY_MAX_LENGTH),
         originSourceId: IdentifierSchema,
       })
-      .strict(),
+      .strict()
+      .superRefine((node, context) => {
+        if (node.delegationProfileId !== null && node.kind !== "Task") {
+          context.addIssue({
+            code: "custom",
+            message: "only a Task may bind a registered delegation profile",
+            path: ["delegationProfileId"],
+          });
+        }
+      }),
   })
   .strict();
 
@@ -378,8 +413,10 @@ export const PlacementErrorCodeSchema = z.enum([
   "invalid_json",
   "invalid_request",
   "invalid_manager_mode",
+  "live_configuration_invalid",
   "live_credentials_missing",
   "provider_request_failed",
+  "provider_timed_out",
   "structured_output_missing",
   "structured_output_invalid",
   "interpretation_out_of_scope",

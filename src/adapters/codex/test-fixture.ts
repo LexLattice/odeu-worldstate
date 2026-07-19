@@ -1,9 +1,12 @@
+import { MOVING_COST_DELEGATION_PROFILE_ID } from "@/domain";
+
 import { AgentBriefSchema } from "./schema";
 
 export const testBrief = AgentBriefSchema.parse({
   briefId: "brief-moving-cost-tool",
   sourceRevisionId: "rev-0002-6c389ed3268a",
   artifactBaseRef: "git:demo-base-001",
+  delegationProfileId: MOVING_COST_DELEGATION_PROFILE_ID,
   goal: "Add a simple moving-cost comparison tool to the demo planning page.",
   doneMeans: [
     "A user can enter at least two provider quotes and compare totals.",

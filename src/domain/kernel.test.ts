@@ -713,6 +713,65 @@ describe("genealogy and projection boundaries", () => {
       "scope_violation",
     );
   });
+
+  it("rejects a hand-crafted brief whose profile differs from its accepted target", () => {
+    const projected = createPrivateProjectionFixture();
+    const ledgerWithoutBrief: WorldstateLedger = {
+      ...projected.ledger,
+      events: projected.ledger.events.slice(0, -1),
+    };
+
+    expectKernelCode(
+      () =>
+        appendLedgerEvent(
+          ledgerWithoutBrief,
+          briefCompiledEvent({
+            eventId: "event-mismatched-profile-brief",
+            commandId: "command-mismatched-profile-brief",
+            occurredAt: "2026-07-16T10:02:31.000Z",
+            actor: HOME_MOVE_ACTORS.manager,
+            payload: {
+              brief: {
+                ...projected.brief,
+                delegationProfileId: null,
+              },
+            },
+          }),
+        ),
+      "scope_violation",
+    );
+  });
+
+  it("rejects a hand-crafted brief that widens a registered profile contract", () => {
+    const projected = createPrivateProjectionFixture();
+    const ledgerWithoutBrief: WorldstateLedger = {
+      ...projected.ledger,
+      events: projected.ledger.events.slice(0, -1),
+    };
+
+    expectKernelCode(
+      () =>
+        appendLedgerEvent(
+          ledgerWithoutBrief,
+          briefCompiledEvent({
+            eventId: "event-widened-profile-brief",
+            commandId: "command-widened-profile-brief",
+            occurredAt: "2026-07-16T10:02:32.000Z",
+            actor: HOME_MOVE_ACTORS.manager,
+            payload: {
+              brief: {
+                ...projected.brief,
+                allowedActions: [
+                  ...projected.brief.allowedActions,
+                  "Edit any repository file",
+                ],
+              },
+            },
+          }),
+        ),
+      "scope_violation",
+    );
+  });
 });
 
 describe("worker and evidence truth", () => {

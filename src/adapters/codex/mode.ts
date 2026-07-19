@@ -12,10 +12,22 @@ export class CodexRequestModeMismatchError extends Error {
   }
 }
 
+export class CodexUnboundDelegationProfileError extends Error {
+  constructor(readonly briefId: string) {
+    super(
+      `Legacy brief ${briefId} has no host-registered delegation profile and is ineligible for Codex execution.`,
+    );
+    this.name = "CodexUnboundDelegationProfileError";
+  }
+}
+
 export function assertCodexRequestMode(
   request: AgentRunRequest,
   adapterMode: AgentRunRequest["mode"],
 ): void {
+  if (request.brief.delegationProfileId === null) {
+    throw new CodexUnboundDelegationProfileError(request.brief.briefId);
+  }
   if (request.mode !== adapterMode) {
     throw new CodexRequestModeMismatchError(request.mode, adapterMode);
   }

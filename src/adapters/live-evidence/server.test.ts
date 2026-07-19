@@ -703,26 +703,25 @@ describe("independent live-candidate evidence verifier", { timeout: 15_000 }, ()
     ).toMatchObject({ result: "passed", artifact: { path: "demo/moving-costs.html" } });
   });
 
-  it("ignores candidate-owned package scripts and verifies only the registered blobs", async () => {
+  it("rejects an extra candidate-owned path before the registered harness runs", async () => {
     const created = await fixture({
       candidatePackageTestScript:
         "node -e \"console.error('candidate-owned-script-ran'); process.exit(99)\"",
     });
+    const runSandbox = vi.fn(async () => commandObservation(0));
 
-    const result = await verifyLiveEvidence(created.request, options(created));
-    const execution = result.observations.find(
-      (observation) => observation.execution !== null,
-    )?.execution;
-
-    expect(result.status).toBe("passed");
     expect(
       created.receipt.metadata.manifest.entries.some(
         (entry) => entry.path === "package.json",
       ),
     ).toBe(true);
-    expect(execution?.stdout.excerpt).not.toContain("candidate-owned-script-ran");
-    expect(execution?.stderr.excerpt).not.toContain("candidate-owned-script-ran");
-    expect(execution?.harness.reportVerified).toBe(true);
+    await expect(
+      verifyLiveEvidence(created.request, options(created, { runSandbox })),
+    ).rejects.toMatchObject({
+      name: "LiveEvidenceVerificationFailedError",
+      issues: ["Unexpected changed path: package.json"],
+    });
+    expect(runSandbox).not.toHaveBeenCalled();
   }, 30_000);
 
   it("blocks candidate process imports before a fork can escape the harness", async () => {

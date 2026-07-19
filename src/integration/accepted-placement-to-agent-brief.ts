@@ -1,10 +1,13 @@
 import {
   compileAgentBrief,
+  MOVING_COST_DELEGATION_PROFILE_ID,
+  MOVING_COST_DELEGATION_PROFILE,
   type AgentBrief,
   type WorldstateDelta,
   type WorldstateNode,
   type WorldstateState,
 } from "@/domain";
+import { HOME_MOVE_IDS } from "@/fixtures";
 
 export interface CompileAcceptedPlacementAgentBriefInput {
   readonly briefId: string;
@@ -18,6 +21,7 @@ export class AcceptedPlacementBriefError extends Error {
       | "accepted_task_missing"
       | "accepted_task_ambiguous"
       | "accepted_task_unsupported"
+      | "accepted_task_topology_unsupported"
       | "project_missing"
       | "project_ambiguous"
       | "goal_missing"
@@ -47,9 +51,7 @@ export function isRegisteredMovingCostReplayTarget(
     node &&
       !node.retiredRevisionId &&
       node.kind === "Task" &&
-      node.title === "Compare provider quotes" &&
-      node.description ===
-        "Create a small comparison tool for moving-provider costs and return focused implementation evidence.",
+      node.delegationProfileId === MOVING_COST_DELEGATION_PROFILE_ID,
   );
 }
 
@@ -103,11 +105,11 @@ function projectAncestorPath(
   target: WorldstateNode,
 ): { readonly project: WorldstateNode; readonly ancestors: readonly WorldstateNode[] } {
   const relations = activeRelations(state);
-  const visited = new Set<string>([target.id]);
   let frontier: Array<{
     readonly nodeId: string;
     readonly ancestors: readonly WorldstateNode[];
-  }> = [{ nodeId: target.id, ancestors: [] }];
+    readonly visited: ReadonlySet<string>;
+  }> = [{ nodeId: target.id, ancestors: [], visited: new Set([target.id]) }];
   const paths: Array<{
     readonly project: WorldstateNode;
     readonly ancestors: readonly WorldstateNode[];
@@ -124,13 +126,16 @@ function projectAncestorPath(
           continue;
         }
         const parent = state.canonical.nodes[relation.toNodeId];
-        if (!active(parent)) continue;
+        if (!active(parent) || entry.visited.has(parent.id)) continue;
         const ancestors = [...entry.ancestors, parent];
         if (parent.kind === "Project") {
           paths.push({ project: parent, ancestors });
-        } else if (!visited.has(parent.id)) {
-          visited.add(parent.id);
-          next.push({ nodeId: parent.id, ancestors });
+        } else {
+          next.push({
+            nodeId: parent.id,
+            ancestors,
+            visited: new Set([...entry.visited, parent.id]),
+          });
         }
       }
     }
@@ -233,6 +238,17 @@ export function compileAcceptedPlacementAgentBrief(
     missingCode: "artifact_missing",
     ambiguousCode: "artifact_ambiguous",
   });
+  if (
+    project.id !== HOME_MOVE_IDS.projectNode ||
+    !ancestors.some((ancestor) => ancestor.id === HOME_MOVE_IDS.budget) ||
+    goal.id !== HOME_MOVE_IDS.goal ||
+    artifact.id !== HOME_MOVE_IDS.artifact
+  ) {
+    throw new AcceptedPlacementBriefError(
+      "accepted_task_topology_unsupported",
+      `Task ${target.id} carries ${MOVING_COST_DELEGATION_PROFILE_ID}, but its canonical project, Budget ancestry, goal, or artifact does not match that host-registered profile.`,
+    );
+  }
   const artifactPath = artifact.data.path;
   if (typeof artifactPath !== "string" || artifactPath.trim().length === 0) {
     throw new AcceptedPlacementBriefError(
@@ -240,7 +256,14 @@ export function compileAcceptedPlacementAgentBrief(
       `Artifact ${artifact.id} has no stable repo-local path.`,
     );
   }
+  if (artifactPath !== MOVING_COST_DELEGATION_PROFILE.expectedArtifacts[0]) {
+    throw new AcceptedPlacementBriefError(
+      "accepted_task_topology_unsupported",
+      `Artifact ${artifact.id} does not bind the registered moving-cost path.`,
+    );
+  }
   const nonProjectAncestors = ancestors.filter((node) => node.id !== project.id);
+  const profile = MOVING_COST_DELEGATION_PROFILE;
 
   return compileAgentBrief(state, {
     id: input.briefId,
@@ -248,6 +271,7 @@ export function compileAcceptedPlacementAgentBrief(
     baseRevisionId: state.canonical.head.id,
     artifactBaseRef: input.artifactBaseRef,
     targetNodeId: target.id,
+    delegationProfileId: profile.id,
     shareNodeIds: [
       project.id,
       goal.id,
@@ -255,41 +279,22 @@ export function compileAcceptedPlacementAgentBrief(
       ...nonProjectAncestors.reverse().map((node) => node.id),
       target.id,
     ],
-    goal: "Add a simple moving-cost comparison tool to the demo planning page.",
-    doneMeans: [
-      "A user can enter at least two provider quotes and compare totals.",
-      "Focused tests for total calculation pass.",
-    ],
+    goal: profile.goal,
+    doneMeans: profile.doneMeans,
     unknowns: [...delta.uncertainty],
-    constraints: [],
-    expectedArtifacts: [artifactPath],
-    environment: "Disposable local demo workspace",
-    agentProfile: "Codex, repository-local implementation",
-    allowedActions: [
-      "Read and edit files inside the disposable demo workspace",
-      "Run focused tests",
-    ],
-    deniedActions: ["Publish externally", "Read omitted worldstate context"],
-    confirmationRequired: ["Any action outside the disposable workspace"],
+    constraints: profile.constraints,
+    expectedArtifacts: profile.expectedArtifacts,
+    environment: profile.environment,
+    agentProfile: profile.agentProfile,
+    allowedActions: profile.allowedActions,
+    deniedActions: profile.deniedActions,
+    confirmationRequired: profile.confirmationRequired,
     evidenceContract: {
-      requirements: [
-        {
-          id: "requirement-focused-tests",
-          label: "Focused moving-cost calculation tests pass",
-          kind: "test",
-          command: "npm test -- moving-cost",
-          required: true,
-        },
-        {
-          id: "requirement-artifact-change",
-          label: "The planning-page artifact change is addressable",
-          kind: "artifact",
-          command: null,
-          required: true,
-        },
-      ],
-      policy: { blockIntegration: true },
+      requirements: profile.evidenceContract.requirements.map((requirement) => ({
+        ...requirement,
+      })),
+      policy: { ...profile.evidenceContract.policy },
     },
-    escalationPath: "Return blocked with the exact missing authorization or information.",
+    escalationPath: profile.escalationPath,
   });
 }
