@@ -345,6 +345,43 @@ function returnedResponse(
 }
 
 describe("live browser-to-server authority handoff", () => {
+  it("accepts the prepared linked-worktree topology used for live execution", async () => {
+    const fixture = await preparedFixture();
+    const linkedWorkspace = join(fixture.root, "linked-workspace");
+    await git(
+      fixture.workspace,
+      "worktree",
+      "add",
+      "--detach",
+      linkedWorkspace,
+      fixture.head,
+    );
+    const linkedFixture: PreparedFixture = {
+      ...fixture,
+      workspace: linkedWorkspace,
+      env: {
+        ...fixture.env,
+        ODEU_CODEX_WORKSPACE: linkedWorkspace,
+        ODEU_CODEX_ALLOW_PRIMARY_WORKTREE: undefined,
+      },
+    };
+
+    await expect(
+      getAgentRuntimeCapability({ env: linkedFixture.env }),
+    ).resolves.toMatchObject({
+      effectiveMode: "live",
+      status: "available",
+      artifactBaseRef: `git:${fixture.head}`,
+    });
+    await expect(
+      authorizeAndPublishLiveRun(requestInput(linkedFixture), {
+        env: linkedFixture.env,
+      }),
+    ).resolves.toMatchObject({
+      runId: fixture.runId,
+    });
+  });
+
   it("runs Git probes without server secrets or configured fsmonitor helpers", async () => {
     const fixture = await preparedFixture();
     const fsmonitorMarker = join(fixture.root, "fsmonitor-invoked");
@@ -426,9 +463,9 @@ describe("live browser-to-server authority handoff", () => {
     const [firstGitProbe] = captured
       .split("\n")
       .filter((line) => line.startsWith("ARGS="));
-    expect(firstGitProbe).toContain(
-      "config --null --name-only --no-includes --list",
-    );
+    expect(firstGitProbe).toContain("ARGS=config --file ");
+    expect(firstGitProbe).toContain(" --no-includes --null --name-only --list");
+    expect(firstGitProbe).not.toContain(" -C ");
     await expect(access(fsmonitorMarker)).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -441,12 +478,14 @@ describe("live browser-to-server authority handoff", () => {
     "rejects a repository-controlled %s directive before other Git probes",
     async (configKey) => {
       const fixture = await preparedFixture();
+      const includedConfig = join(fixture.root, "malformed-included-config");
+      await writeFile(includedConfig, "[malformed\n", "utf8");
       await git(
         fixture.workspace,
         "config",
         "--local",
         configKey,
-        join(fixture.root, "missing-included-config"),
+        includedConfig,
       );
 
       const options = { env: fixture.env };
@@ -456,9 +495,41 @@ describe("live browser-to-server authority handoff", () => {
       });
       await expect(
         authorizeAndPublishLiveRun(requestInput(fixture), options),
-      ).rejects.toMatchObject({ code: "workspace_not_ready" });
+      ).rejects.toMatchObject({
+        code: "workspace_not_ready",
+        cause: { message: "repository-controlled Git helper is not allowed" },
+      });
     },
   );
+
+  it("rejects an active worktree include without opening its malformed target", async () => {
+    const fixture = await preparedFixture();
+    const includedConfig = join(
+      fixture.root,
+      "malformed-worktree-included-config",
+    );
+    await writeFile(includedConfig, "[malformed\n", "utf8");
+    await git(fixture.workspace, "config", "extensions.worktreeConfig", "true");
+    await git(
+      fixture.workspace,
+      "config",
+      "--worktree",
+      "include.path",
+      includedConfig,
+    );
+
+    const options = { env: fixture.env };
+    await expect(getAgentRuntimeCapability(options)).resolves.toMatchObject({
+      effectiveMode: "live",
+      status: "unavailable",
+    });
+    await expect(
+      authorizeAndPublishLiveRun(requestInput(fixture), options),
+    ).rejects.toMatchObject({
+      code: "workspace_not_ready",
+      cause: { message: "repository-controlled Git helper is not allowed" },
+    });
+  });
 
   it.each(["clean", "smudge", "process"] as const)(
     "rejects a repository-controlled %s filter before Git can execute it",

@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   access,
   link,
+  lstat,
   mkdir,
   open,
   readFile,
@@ -12,7 +13,7 @@ import {
   rename,
   unlink,
 } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 
@@ -51,6 +52,8 @@ import {
 
 const execFile = promisify(execFileCallback);
 const GIT_NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
+const GIT_CONFIG_SCAN_CWD =
+  process.platform === "win32" ? (process.env.SYSTEMROOT ?? "C:\\") : "/";
 
 export type LiveAuthorityServerErrorCode =
   | "live_not_configured"
@@ -224,15 +227,54 @@ async function assertNoRepositoryExecutableGitHelpers(
   workspace: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<void> {
-  // Only names are requested: repository config values can contain private
-  // remote URLs and are unnecessary for deciding whether preflight is safe.
   const configuredNames = (
-    await git(
-      workspace,
-      ["config", "--null", "--name-only", "--no-includes", "--list"],
-      environment,
+    await Promise.all(
+      (await repositoryGitConfigurationFiles(workspace)).map(
+        async (configurationFile) => {
+          let configurationFileStatus;
+          try {
+            configurationFileStatus = await lstat(configurationFile);
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              "code" in error &&
+              error.code === "ENOENT"
+            ) {
+              return "";
+            }
+            throw error;
+          }
+          if (!configurationFileStatus.isFile()) {
+            throw new Error(
+              "repository Git configuration must be a regular file",
+            );
+          }
+          // Run the config builtin outside repository discovery. `git -C
+          // <workspace> config --no-includes` can parse an include while Git
+          // discovers the repository, before the builtin applies that option.
+          const result = await execFile(
+            "git",
+            [
+              "config",
+              "--file",
+              configurationFile,
+              "--no-includes",
+              "--null",
+              "--name-only",
+              "--list",
+            ],
+            {
+              cwd: GIT_CONFIG_SCAN_CWD,
+              encoding: "utf8",
+              env: environment,
+            },
+          );
+          return result.stdout;
+        },
+      ),
     )
   )
+    .join("")
     .split("\0")
     .map((name) => name.trim())
     .filter(Boolean);
@@ -246,6 +288,59 @@ async function assertNoRepositoryExecutableGitHelpers(
   ) {
     throw new Error("repository-controlled Git helper is not allowed");
   }
+}
+
+async function repositoryGitConfigurationFiles(
+  workspace: string,
+): Promise<readonly string[]> {
+  const dotGitPath = resolve(workspace, ".git");
+  const dotGitStatus = await lstat(dotGitPath);
+  let gitDirectory: string;
+  if (dotGitStatus.isDirectory()) {
+    gitDirectory = await realpath(dotGitPath);
+  } else if (dotGitStatus.isFile()) {
+    const pointer = await readFile(dotGitPath, "utf8");
+    const match = /^gitdir: ([^\0\r\n]+)\r?\n?$/.exec(pointer);
+    if (!match) {
+      throw new Error("worktree Git directory pointer is malformed");
+    }
+    gitDirectory = await realpath(resolve(dirname(dotGitPath), match[1]));
+  } else {
+    throw new Error("workspace .git entry is not a regular directory or file");
+  }
+
+  let commonDirectory = gitDirectory;
+  const pointerPath = join(gitDirectory, "commondir");
+  let pointerStatus;
+  try {
+    pointerStatus = await lstat(pointerPath);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return [
+        join(commonDirectory, "config"),
+        join(gitDirectory, "config.worktree"),
+      ];
+    }
+    throw error;
+  }
+  if (!pointerStatus.isFile()) {
+    throw new Error("Git common-directory pointer is not a regular file");
+  }
+  const pointer = await readFile(pointerPath, "utf8");
+  const value = pointer.replace(/\r?\n$/, "");
+  if (!value || /[\0\r\n]/.test(value)) {
+    throw new Error("Git common-directory pointer is malformed");
+  }
+  commonDirectory = await realpath(resolve(gitDirectory, value));
+
+  return [
+    join(commonDirectory, "config"),
+    join(gitDirectory, "config.worktree"),
+  ];
 }
 
 interface DirectCommitRef {

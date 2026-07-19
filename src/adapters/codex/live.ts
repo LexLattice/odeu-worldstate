@@ -267,38 +267,39 @@ async function preflightGitConfigurationFiles(
   }
 
   let commonDirectory = gitDirectory;
+  const commonDirectoryPointerPath = join(gitDirectory, "commondir");
+  let commonDirectoryPointerStat;
   try {
-    const commonDirectoryPointerPath = join(gitDirectory, "commondir");
-    const commonDirectoryPointerStat = await lstat(
-      commonDirectoryPointerPath,
-    );
-    if (!commonDirectoryPointerStat.isFile()) {
-      throw new LiveCodexConfigurationError(
-        "Live Codex Git preflight requires a regular common-directory pointer file.",
-      );
-    }
-    const commonDirectoryPointer = await readFile(
-      commonDirectoryPointerPath,
-      "utf8",
-    );
-    const value = commonDirectoryPointer.replace(/\r?\n$/, "");
-    if (!value || /[\0\r\n]/.test(value)) {
-      throw new LiveCodexConfigurationError(
-        "Live Codex Git preflight could not safely resolve the common Git directory.",
-      );
-    }
-    commonDirectory = await realpath(resolve(gitDirectory, value));
+    commonDirectoryPointerStat = await lstat(commonDirectoryPointerPath);
   } catch (error) {
     if (
-      !(
-        error instanceof Error &&
-        "code" in error &&
-        error.code === "ENOENT"
-      )
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
     ) {
-      throw error;
+      return [
+        join(commonDirectory, "config"),
+        join(gitDirectory, "config.worktree"),
+      ];
     }
+    throw error;
   }
+  if (!commonDirectoryPointerStat.isFile()) {
+    throw new LiveCodexConfigurationError(
+      "Live Codex Git preflight requires a regular common-directory pointer file.",
+    );
+  }
+  const commonDirectoryPointer = await readFile(
+    commonDirectoryPointerPath,
+    "utf8",
+  );
+  const value = commonDirectoryPointer.replace(/\r?\n$/, "");
+  if (!value || /[\0\r\n]/.test(value)) {
+    throw new LiveCodexConfigurationError(
+      "Live Codex Git preflight could not safely resolve the common Git directory.",
+    );
+  }
+  commonDirectory = await realpath(resolve(gitDirectory, value));
 
   return [
     join(commonDirectory, "config"),

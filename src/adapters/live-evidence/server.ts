@@ -7,11 +7,12 @@ import {
   mkdir,
   mkdtemp,
   open,
+  readFile,
   realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 import type {
@@ -61,6 +62,7 @@ const MAX_CANDIDATE_TREE_ENTRIES = 10_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 15_000;
 const MAX_COMMAND_TIMEOUT_MS = 30_000;
 const GIT_TIMEOUT_MS = 30_000;
+const GIT_CONFIG_SCAN_CWD = "/";
 const SANDBOX_TMPFS_BYTES = 16_777_216;
 const SANDBOX_ADDRESS_SPACE_BYTES = 2_147_483_648;
 const SANDBOX_FILE_BYTES = 1_048_576;
@@ -486,26 +488,18 @@ const PARTIAL_CLONE_HELPER_CONFIG =
 async function assertSafeRepositoryGitConfiguration(
   repositoryPath: string,
 ): Promise<void> {
-  // Inspect the raw local/worktree files without following include paths. Only
-  // names are needed, and these probes do not resolve candidate objects or run
-  // an upload-pack helper. They must precede every object/ref observation.
+  let configurationFiles: readonly string[];
+  try {
+    configurationFiles = await repositoryGitConfigurationFiles(repositoryPath);
+  } catch (error) {
+    if (error instanceof LiveEvidenceVerificationFailedError) throw error;
+    throw new LiveEvidenceVerificationFailedError(
+      "The live-evidence repository configuration could not be located safely.",
+    );
+  }
   const configuredNames = (
     await Promise.all(
-      (["local", "worktree"] as const).map((scope) =>
-        git(
-          repositoryPath,
-          [
-            "config",
-            "--no-includes",
-            `--${scope}`,
-            "--null",
-            "--name-only",
-            "--list",
-          ],
-          `checking ${scope} repository Git configuration`,
-          256 * 1_024,
-        ),
-      ),
+      configurationFiles.map(scanRepositoryGitConfigurationFile),
     )
   ).flatMap((raw) =>
     raw
@@ -525,6 +519,146 @@ async function assertSafeRepositoryGitConfiguration(
       "The live-evidence repository contains unsafe includes or partial-clone helpers.",
     );
   }
+}
+
+async function scanRepositoryGitConfigurationFile(
+  configurationFile: string,
+): Promise<Buffer> {
+  let configurationFileStatus;
+  try {
+    configurationFileStatus = await lstat(configurationFile);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return Buffer.alloc(0);
+    }
+    throw new LiveEvidenceVerificationFailedError(
+      "The live-evidence repository configuration could not be checked safely.",
+    );
+  }
+  if (!configurationFileStatus.isFile()) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The live-evidence repository configuration is not a regular file.",
+    );
+  }
+
+  let result: CapturedProcessResult;
+  try {
+    // This must not use `git -C`: repository discovery can parse an include
+    // before the config builtin applies `--no-includes`.
+    result = await spawnBounded({
+      command: "/usr/bin/git",
+      args: [
+        "config",
+        "--file",
+        configurationFile,
+        "--no-includes",
+        "--null",
+        "--name-only",
+        "--list",
+      ],
+      cwd: GIT_CONFIG_SCAN_CWD,
+      environment: SECRET_FREE_TOOL_ENVIRONMENT,
+      timeoutMs: GIT_TIMEOUT_MS,
+      outputLimit: 256 * 1_024,
+    });
+  } catch (error) {
+    throw new LiveEvidenceUnavailableError(
+      "Git was unavailable while checking repository configuration.",
+      { cause: error },
+    );
+  }
+  if (result.timedOut || result.outputLimited || result.exitCode !== 0) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The live-evidence repository configuration could not be checked safely.",
+    );
+  }
+  return result.stdout;
+}
+
+async function repositoryGitConfigurationFiles(
+  repositoryPath: string,
+): Promise<readonly string[]> {
+  const dotGitPath = resolve(repositoryPath, ".git");
+  let dotGitStatus;
+  try {
+    dotGitStatus = await lstat(dotGitPath);
+  } catch (error) {
+    if (!(
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    )) {
+      throw error;
+    }
+    const [headStatus, objectsStatus] = await Promise.all([
+      lstat(join(repositoryPath, "HEAD")),
+      lstat(join(repositoryPath, "objects")),
+    ]);
+    if (!headStatus.isFile() || !objectsStatus.isDirectory()) {
+      throw new LiveEvidenceVerificationFailedError(
+        "The registered live-evidence repository has no recognizable Git directory.",
+      );
+    }
+    return [
+      join(repositoryPath, "config"),
+      join(repositoryPath, "config.worktree"),
+    ];
+  }
+
+  let gitDirectory: string;
+  if (dotGitStatus.isDirectory()) {
+    gitDirectory = await realpath(dotGitPath);
+  } else if (dotGitStatus.isFile()) {
+    const pointer = await readFile(dotGitPath, "utf8");
+    const match = /^gitdir: ([^\0\r\n]+)\r?\n?$/.exec(pointer);
+    if (!match) {
+      throw new LiveEvidenceVerificationFailedError(
+        "The registered worktree Git directory pointer is malformed.",
+      );
+    }
+    gitDirectory = await realpath(resolve(dirname(dotGitPath), match[1]));
+  } else {
+    throw new LiveEvidenceVerificationFailedError(
+      "The registered repository .git entry is not a regular directory or file.",
+    );
+  }
+
+  let commonDirectory = gitDirectory;
+  const pointerPath = join(gitDirectory, "commondir");
+  let pointerStatus;
+  try {
+    pointerStatus = await lstat(pointerPath);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return [
+        join(commonDirectory, "config"),
+        join(gitDirectory, "config.worktree"),
+      ];
+    }
+    throw error;
+  }
+  if (!pointerStatus.isFile()) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The repository common-directory pointer is not a regular file.",
+    );
+  }
+  const pointer = await readFile(pointerPath, "utf8");
+  const value = pointer.replace(/\r?\n$/, "");
+  if (!value || /[\0\r\n]/.test(value)) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The repository common-directory pointer is malformed.",
+    );
+  }
+  commonDirectory = await realpath(resolve(gitDirectory, value));
+
+  return [
+    join(commonDirectory, "config"),
+    join(gitDirectory, "config.worktree"),
+  ];
 }
 
 function text(bytes: Uint8Array): string {

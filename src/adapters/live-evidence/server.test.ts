@@ -220,6 +220,107 @@ describe("independent live-candidate evidence verifier", { timeout: 15_000 }, ()
     );
   }, 30_000);
 
+  it("verifies a sealed candidate through a linked worktree Git directory", async () => {
+    const created = await fixture();
+    const linkedRoot = await mkdtemp(join(tmpdir(), "odeu-live-evidence-linked-"));
+    temporaryDirectories.push(linkedRoot);
+    const linkedRepositoryPath = join(linkedRoot, "workspace");
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "worktree",
+      "add",
+      "--detach",
+      linkedRepositoryPath,
+      created.candidateCommit,
+    ]);
+
+    const result = await verifyLiveEvidence(
+      created.request,
+      options(created, {
+        repositories: {
+          [created.receipt.metadata.repositoryId]: {
+            repositoryPath: linkedRepositoryPath,
+          },
+        },
+        runSandbox: async () => commandObservation(0),
+      }),
+    );
+
+    expect(result).toMatchObject({ ok: true, status: "passed" });
+  });
+
+  it("fails closed when an existing linked-worktree commondir target disappears", async () => {
+    const created = await fixture();
+    const linkedRoot = await mkdtemp(join(tmpdir(), "odeu-live-evidence-linked-"));
+    temporaryDirectories.push(linkedRoot);
+    const linkedRepositoryPath = join(linkedRoot, "workspace");
+    await execFileAsync("/usr/bin/git", [
+      "-C",
+      created.repositoryPath,
+      "worktree",
+      "add",
+      "--detach",
+      linkedRepositoryPath,
+      created.candidateCommit,
+    ]);
+    const { stdout: gitDirectoryOutput } = await execFileAsync(
+      "/usr/bin/git",
+      ["-C", linkedRepositoryPath, "rev-parse", "--absolute-git-dir"],
+      { encoding: "utf8" },
+    );
+    await writeFile(
+      join(gitDirectoryOutput.trim(), "commondir"),
+      "missing-common-directory\n",
+      "utf8",
+    );
+    const runSandbox = vi.fn(async () => commandObservation(0));
+
+    await expect(
+      verifyLiveEvidence(
+        created.request,
+        options(created, {
+          repositories: {
+            [created.receipt.metadata.repositoryId]: {
+              repositoryPath: linkedRepositoryPath,
+            },
+          },
+          runSandbox,
+        }),
+      ),
+    ).rejects.toThrow(/configuration could not be located safely/i);
+    expect(runSandbox).not.toHaveBeenCalled();
+  });
+
+  it("verifies a sealed candidate through a registered bare repository", async () => {
+    const created = await fixture();
+    const bareRoot = await mkdtemp(
+      join(tmpdir(), "odeu-live-evidence-bare-"),
+    );
+    temporaryDirectories.push(bareRoot);
+    const bareRepositoryPath = join(bareRoot, "repository.git");
+    await execFileAsync("/usr/bin/git", [
+      "clone",
+      "--mirror",
+      created.repositoryPath,
+      bareRepositoryPath,
+    ]);
+
+    const result = await verifyLiveEvidence(
+      created.request,
+      options(created, {
+        repositories: {
+          [created.receipt.metadata.repositoryId]: {
+            repositoryPath: bareRepositoryPath,
+          },
+        },
+        runSandbox: async () => commandObservation(0),
+      }),
+    );
+
+    expect(result).toMatchObject({ ok: true, status: "passed" });
+  });
+
   it("canonicalizes and executes an in-toolchain Node symlink", async () => {
     const created = await fixture();
     const toolchainPath = await symlinkedNodeToolchain();
@@ -350,11 +451,7 @@ describe("independent live-candidate evidence verifier", { timeout: 15_000 }, ()
         ".git",
         `odeu-${scope}-included.config`,
       );
-      await writeFile(
-        includedConfig,
-        "[user]\n\tname = included repository config\n",
-        "utf8",
-      );
+      await writeFile(includedConfig, "[malformed\n", "utf8");
       if (scope === "worktree") {
         await execFileAsync("/usr/bin/git", [
           "-C",
