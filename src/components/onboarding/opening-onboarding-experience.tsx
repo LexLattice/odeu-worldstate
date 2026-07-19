@@ -165,6 +165,7 @@ export function OpeningOnboardingExperience() {
   const [onboarding, setOnboarding] = useState(createOpeningOnboardingState);
   const [presentation, setPresentation] =
     useState<WorldstatePresentationState | null>(null);
+  const [workbenchBusy, setWorkbenchBusy] = useState(false);
   const guideHeadingRef = useRef<HTMLHeadingElement>(null);
   const completionHeadingRef = useRef<HTMLHeadingElement>(null);
   const workbenchFrameRef = useRef<HTMLDivElement>(null);
@@ -268,8 +269,8 @@ export function OpeningOnboardingExperience() {
                 ) : null}
               </div>
               <p className={styles.chapterSummary}>
-                Presentation guidance only · no ledger, provider, or authority
-                command.
+                Presentation only while this guide is active · ledger,
+                provider, and authority-increasing actions stay locked.
               </p>
             </div>
 
@@ -397,15 +398,18 @@ export function OpeningOnboardingExperience() {
               <h2 ref={completionHeadingRef} tabIndex={-1}>
                 Opening complete · normal workbench available
               </h2>
-              <span>
-                The guide changed presentation only. Source capture, semantic
-                commit, and agent authority remain separate workbench actions.
+              <span id="opening-replay-status">
+                {workbenchBusy
+                  ? "A workbench operation is still in flight. Replay unlocks after it settles so no ongoing write or provider call crosses into guidance."
+                  : "The guide changed presentation only. Source capture, semantic commit, and agent authority remain separate workbench actions."}
               </span>
             </div>
             <div className={styles.completionActions}>
               <button
+                aria-describedby="opening-replay-status"
                 className={styles.replayButton}
                 data-onboarding-action="replay"
+                disabled={workbenchBusy}
                 onClick={() => dispatch({ type: "replay" })}
                 type="button"
               >
@@ -429,6 +433,8 @@ export function OpeningOnboardingExperience() {
           ref={workbenchFrameRef}
         >
           <WorldstateWorkbench
+            mutationAccess={guideActive ? "presentation-only" : "enabled"}
+            onOperationBusyChange={setWorkbenchBusy}
             onPresentationStateChange={setPresentation}
             presentationCommand={view.presentationCommand ?? undefined}
           />

@@ -87,7 +87,11 @@ test("requires explicit consent and can skip directly to the unchanged workbench
   ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Capture & place" }),
-  ).toBeVisible();
+  ).toBeEnabled();
+  await expect(workbenchRoot(page)).toHaveAttribute(
+    "data-mutation-access",
+    "enabled",
+  );
 });
 
 test("interactive guidance advances only after the user makes each presentation choice", async ({
@@ -100,6 +104,15 @@ test("interactive guidance advances only after the user makes each presentation 
     "data-worldstate-revision",
   );
   const initialEventCount = await persistedLedgerEventCount(page);
+
+  await expect(workbench).toHaveAttribute(
+    "data-mutation-access",
+    "presentation-only",
+  );
+  await expect(
+    page.getByRole("button", { name: "Capture & place" }),
+  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Reset sandbox" })).toBeDisabled();
 
   await expect(onboarding).toHaveAttribute(
     "data-onboarding-step",
@@ -176,6 +189,9 @@ test("interactive guidance advances only after the user makes each presentation 
   ).toBeEnabled();
   await expect(
     page.getByRole("button", { name: "Capture & place" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText(/Finish or skip the opening guide before saving this source/i),
   ).toBeVisible();
   await page.getByRole("button", { name: "Finish opening" }).click();
 
@@ -190,6 +206,11 @@ test("interactive guidance advances only after the user makes each presentation 
       name: "Opening complete · normal workbench available",
     }),
   ).toBeFocused();
+  await expect(workbench).toHaveAttribute("data-mutation-access", "enabled");
+  await expect(
+    page.getByRole("button", { name: "Capture & place" }),
+  ).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Reset sandbox" })).toBeEnabled();
   await page.getByRole("button", { name: "Close guide" }).click();
   await expect(onboarding).toHaveAttribute("data-onboarding-phase", "skipped");
   await expect(workbench).toBeFocused();
@@ -219,6 +240,13 @@ test("watch-only guidance uses state-derived presentation commands without ledge
     "data-onboarding-step",
     "establish-project",
   );
+  await expect(workbench).toHaveAttribute(
+    "data-mutation-access",
+    "presentation-only",
+  );
+  await expect(
+    page.getByRole("button", { name: "Capture & place" }),
+  ).toBeDisabled();
   await expect(continueButton).toBeEnabled();
   await continueButton.click();
 
@@ -266,6 +294,13 @@ test("watch-only guidance uses state-derived presentation commands without ledge
   await expect(
     page.getByRole("heading", { name: "Meet the sandbox project" }),
   ).toBeFocused();
+  await expect(workbench).toHaveAttribute(
+    "data-mutation-access",
+    "presentation-only",
+  );
+  await expect(
+    page.getByRole("button", { name: "Capture & place" }),
+  ).toBeDisabled();
   await expect(continueButton).toBeEnabled();
   await expect(workbench).toHaveAttribute(
     "data-worldstate-revision",

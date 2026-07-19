@@ -339,7 +339,8 @@
 }
 
 .continueButton:disabled,
-.secondaryButton:disabled {
+.secondaryButton:disabled,
+.replayButton:disabled {
   cursor: not-allowed;
   opacity: 0.48;
 }

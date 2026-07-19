@@ -35,6 +35,8 @@ vi.mock("@/components/worldstate/worldstate-workbench", () => ({
 }));
 
 interface MockWorkbenchProps {
+  readonly mutationAccess?: "enabled" | "presentation-only";
+  readonly onOperationBusyChange?: (busy: boolean) => void;
   readonly presentationCommand?: WorldstatePresentationCommand;
   readonly onPresentationStateChange?: (
     state: WorldstatePresentationState,
@@ -64,6 +66,12 @@ function workbenchProps(): MockWorkbenchProps {
 function reportPresentation(state: WorldstatePresentationState) {
   act(() => {
     workbenchProps().onPresentationStateChange?.(state);
+  });
+}
+
+function reportOperationBusy(busy: boolean) {
+  act(() => {
+    workbenchProps().onOperationBusyChange?.(busy);
   });
 }
 
@@ -101,6 +109,7 @@ describe("OpeningOnboardingExperience", () => {
       screen.queryByRole("heading", { name: "Meet the sandbox project" }),
     ).not.toBeInTheDocument();
     expect(workbenchProps().presentationCommand).toBeUndefined();
+    expect(workbenchProps().mutationAccess).toBe("enabled");
   });
 
   it("keeps interactive progress observed, user-paced, pausable, and captioned", async () => {
@@ -109,6 +118,7 @@ describe("OpeningOnboardingExperience", () => {
 
     await user.click(screen.getByRole("button", { name: /Interactive/i }));
 
+    expect(workbenchProps().mutationAccess).toBe("presentation-only");
     expect(
       screen.getByRole("heading", { name: "Meet the sandbox project" }),
     ).toHaveFocus();
@@ -157,6 +167,10 @@ describe("OpeningOnboardingExperience", () => {
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Resume" }));
     expect(continueButton).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Skip guide" }));
+    expect(workbenchProps().mutationAccess).toBe("enabled");
+    expect(screen.getByTestId("worldstate-workbench")).toHaveFocus();
   });
 
   it("uses only typed watch-only presentation commands and exposes replay after handoff", async () => {
@@ -216,6 +230,7 @@ describe("OpeningOnboardingExperience", () => {
       screen.getByRole("heading", { name: "Bring in an ordinary idea" }),
     ).toHaveFocus();
     expect(workbenchProps().presentationCommand).toBeUndefined();
+    expect(workbenchProps().mutationAccess).toBe("presentation-only");
 
     await user.click(screen.getByRole("button", { name: "Finish opening" }));
     expect(
@@ -224,12 +239,24 @@ describe("OpeningOnboardingExperience", () => {
       }),
     ).toHaveFocus();
     expect(screen.getByTestId("worldstate-workbench")).toBeInTheDocument();
+    expect(workbenchProps().mutationAccess).toBe("enabled");
 
-    await user.click(screen.getByRole("button", { name: "Replay opening" }));
+    const replayButton = screen.getByRole("button", {
+      name: "Replay opening",
+    });
+    reportOperationBusy(true);
+    expect(replayButton).toBeDisabled();
+    expect(replayButton).toHaveAccessibleDescription(
+      /A workbench operation is still in flight/i,
+    );
+    reportOperationBusy(false);
+    expect(replayButton).toBeEnabled();
+    await user.click(replayButton);
     expect(
       screen.getByRole("heading", { name: "Meet the sandbox project" }),
     ).toHaveFocus();
     expect(workbenchProps().presentationCommand).toBeUndefined();
+    expect(workbenchProps().mutationAccess).toBe("presentation-only");
 
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -241,5 +268,6 @@ describe("OpeningOnboardingExperience", () => {
       screen.queryByText("Opening complete · normal workbench available"),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("worldstate-workbench")).toHaveFocus();
+    expect(workbenchProps().mutationAccess).toBe("enabled");
   });
 });
