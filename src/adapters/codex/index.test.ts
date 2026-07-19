@@ -184,6 +184,27 @@ describe("codexFailure", () => {
     });
   });
 
+  it("enforces the live turn deadline when the operation ignores cancellation", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const operation = withLiveCodexDeadline(
+      (signal) => {
+        observedSignal = signal;
+        return new Promise<never>(() => undefined);
+      },
+      5,
+    );
+
+    await expect(operation).rejects.toMatchObject({
+      name: "LiveCodexDeadlineExceededError",
+      timeoutMs: 5,
+    });
+    expect(observedSignal?.aborted).toBe(true);
+    expect(observedSignal?.reason).toMatchObject({
+      name: "LiveCodexDeadlineExceededError",
+      timeoutMs: 5,
+    });
+  });
+
   it("rejects every ignored workspace root, including local dependency trees", () => {
     expect(
       unsafeIgnoredWorkspaceEntries(

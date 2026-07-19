@@ -86,24 +86,22 @@ export async function withLiveCodexDeadline<T>(
   assertLiveCodexProviderTimeout(timeoutMs);
 
   const controller = new AbortController();
-  let expired = false;
-  const timer = setTimeout(() => {
-    expired = true;
-    controller.abort(new LiveCodexDeadlineExceededError(timeoutMs));
-  }, timeoutMs);
-  timer.unref();
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new LiveCodexDeadlineExceededError(timeoutMs);
+      // Settle the host deadline before abort listeners can surface a
+      // provider-specific cancellation error.
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
+  });
+  timer?.unref();
 
   try {
-    const result = await operation(controller.signal);
-    if (expired) throw new LiveCodexDeadlineExceededError(timeoutMs);
-    return result;
-  } catch (error) {
-    if (!expired || error instanceof LiveCodexDeadlineExceededError) {
-      throw error;
-    }
-    throw new LiveCodexDeadlineExceededError(timeoutMs, { cause: error });
+    return await Promise.race([operation(controller.signal), deadline]);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 }
 

@@ -1,13 +1,12 @@
 import {
   compileAgentBrief,
   MOVING_COST_DELEGATION_PROFILE_ID,
-  MOVING_COST_DELEGATION_PROFILE,
+  registeredDelegationProfile,
   type AgentBrief,
   type WorldstateDelta,
   type WorldstateNode,
   type WorldstateState,
 } from "@/domain";
-import { HOME_MOVE_IDS } from "@/fixtures";
 
 export interface CompileAcceptedPlacementAgentBriefInput {
   readonly briefId: string;
@@ -219,12 +218,14 @@ export function compileAcceptedPlacementAgentBrief(
   input: CompileAcceptedPlacementAgentBriefInput,
 ): AgentBrief {
   const { delta, target } = latestAcceptedTaskPlacement(state);
-  if (!isRegisteredMovingCostReplayTarget(target)) {
+  const delegationProfileId = target.delegationProfileId;
+  if (!delegationProfileId) {
     throw new AcceptedPlacementBriefError(
       "accepted_task_unsupported",
       `Task ${target.id} does not match the registered moving-cost replay scenario.`,
     );
   }
+  const profile = registeredDelegationProfile(delegationProfileId);
   const { project, ancestors } = projectAncestorPath(state, target);
   const goal = relatedOrOnlyNode(state, target, project, {
     kind: "Goal",
@@ -239,14 +240,16 @@ export function compileAcceptedPlacementAgentBrief(
     ambiguousCode: "artifact_ambiguous",
   });
   if (
-    project.id !== HOME_MOVE_IDS.projectNode ||
-    !ancestors.some((ancestor) => ancestor.id === HOME_MOVE_IDS.budget) ||
-    goal.id !== HOME_MOVE_IDS.goal ||
-    artifact.id !== HOME_MOVE_IDS.artifact
+    project.id !== profile.expectedProjectId ||
+    !ancestors.some(
+      (ancestor) => ancestor.id === profile.expectedAncestorId,
+    ) ||
+    goal.id !== profile.expectedGoalId ||
+    artifact.id !== profile.expectedArtifactId
   ) {
     throw new AcceptedPlacementBriefError(
       "accepted_task_topology_unsupported",
-      `Task ${target.id} carries ${MOVING_COST_DELEGATION_PROFILE_ID}, but its canonical project, Budget ancestry, goal, or artifact does not match that host-registered profile.`,
+      `Task ${target.id} carries ${profile.id}, but its canonical project, required ancestry, goal, or artifact does not match that host-registered profile.`,
     );
   }
   const artifactPath = artifact.data.path;
@@ -256,14 +259,13 @@ export function compileAcceptedPlacementAgentBrief(
       `Artifact ${artifact.id} has no stable repo-local path.`,
     );
   }
-  if (artifactPath !== MOVING_COST_DELEGATION_PROFILE.expectedArtifacts[0]) {
+  if (artifactPath !== profile.expectedArtifacts[0]) {
     throw new AcceptedPlacementBriefError(
       "accepted_task_topology_unsupported",
       `Artifact ${artifact.id} does not bind the registered moving-cost path.`,
     );
   }
   const nonProjectAncestors = ancestors.filter((node) => node.id !== project.id);
-  const profile = MOVING_COST_DELEGATION_PROFILE;
 
   return compileAgentBrief(state, {
     id: input.briefId,

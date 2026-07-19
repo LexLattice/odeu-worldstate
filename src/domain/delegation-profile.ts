@@ -53,6 +53,10 @@ export type DelegationProfileId =
 
 export interface RegisteredDelegationProfile {
   readonly id: DelegationProfileId;
+  readonly expectedProjectId: string;
+  readonly expectedAncestorId: string;
+  readonly expectedGoalId: string;
+  readonly expectedArtifactId: string;
   readonly allowedChangePaths: readonly string[];
   readonly goal: string;
   readonly doneMeans: readonly string[];
@@ -78,6 +82,10 @@ export interface RegisteredDelegationProfile {
 
 export const MOVING_COST_DELEGATION_PROFILE = Object.freeze({
   id: MOVING_COST_DELEGATION_PROFILE_ID,
+  expectedProjectId: "node-project-home-move",
+  expectedAncestorId: "node-area-budget",
+  expectedGoalId: "node-goal-under-4000",
+  expectedArtifactId: "node-artifact-planning-page",
   allowedChangePaths: MOVING_COST_DELEGATION_ALLOWED_CHANGE_PATHS,
   goal: "Add a simple moving-cost comparison tool to the demo planning page.",
   doneMeans: MOVING_COST_DELEGATION_DONE_MEANS,

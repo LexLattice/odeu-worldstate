@@ -5,6 +5,7 @@ import {
   briefCompiledEvent,
   buildDeltaAcceptedEvent,
   deltaProposedEvent,
+  MOVING_COST_DELEGATION_PROFILE,
   MOVING_COST_DELEGATION_PROFILE_ID,
   reduceWorldstateLedger,
   sourceCapturedEvent,
@@ -191,6 +192,12 @@ describe("compileAcceptedPlacementAgentBrief", () => {
 
     expect(brief.targetNodeId).toBe(TASK_ID);
     expect(brief.targetNodeId).not.toBe(HOME_MOVE_IDS.compareQuotes);
+    expect(MOVING_COST_DELEGATION_PROFILE).toMatchObject({
+      expectedProjectId: HOME_MOVE_IDS.projectNode,
+      expectedAncestorId: HOME_MOVE_IDS.budget,
+      expectedGoalId: HOME_MOVE_IDS.goal,
+      expectedArtifactId: HOME_MOVE_IDS.artifact,
+    });
     expect(brief.baseRevisionId).toBe(state.canonical.head.id);
     expect(brief.delegationProfileId).toBe(
       MOVING_COST_DELEGATION_PROFILE_ID,

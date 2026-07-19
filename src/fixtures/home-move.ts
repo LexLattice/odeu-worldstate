@@ -29,13 +29,13 @@ import {
 
 export const HOME_MOVE_IDS = {
   project: "project-home-move",
-  projectNode: "node-project-home-move",
-  goal: "node-goal-under-4000",
+  projectNode: MOVING_COST_DELEGATION_PROFILE.expectedProjectId,
+  goal: MOVING_COST_DELEGATION_PROFILE.expectedGoalId,
   schedule: "node-area-schedule",
-  budget: "node-area-budget",
+  budget: MOVING_COST_DELEGATION_PROFILE.expectedAncestorId,
   providers: "node-area-providers",
   packing: "node-area-packing",
-  artifact: "node-artifact-planning-page",
+  artifact: MOVING_COST_DELEGATION_PROFILE.expectedArtifactId,
   adoptedDecision: "node-decision-three-quotes",
   privateConstraint: "node-private-new-address",
   source: "source-moving-cost-tool",
