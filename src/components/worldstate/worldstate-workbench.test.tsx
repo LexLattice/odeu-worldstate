@@ -16,6 +16,7 @@ import {
   HOME_MOVE_REPLAY_EVIDENCE_RUNNER_ID,
   HOME_MOVE_REPLAY_EVIDENCE_TEST_COMMAND,
   HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
+  HOME_MOVE_REPLAY_IDENTITY,
   HOME_MOVE_REPLAY_TEST_EVIDENCE_REF_PREFIX,
   ReplayEvidenceResponseSchema,
   type ReplayEvidenceRequest,
@@ -41,6 +42,7 @@ import {
 import {
   appendLedgerEvent,
   evidenceValidationEvent,
+  MOVING_COST_DELEGATION_PROFILE_ID,
   reduceWorldstateLedger,
   runAuthorizedEvent,
   runLifecycleEvent,
@@ -110,7 +112,7 @@ function passingReplayEvidence(request: ReplayEvidenceRequest) {
     status: "passed",
     verifier: {
       identity: HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
-      version: 1,
+      version: 2,
       kind: "independent_fixture",
     },
     bindings: {
@@ -128,7 +130,7 @@ function passingReplayEvidence(request: ReplayEvidenceRequest) {
     observedAt: "2026-07-17T10:00:30.000Z",
     bundle: {
       bundleId: HOME_MOVE_REPLAY_EVIDENCE_BUNDLE_ID,
-      version: 1,
+      version: 2,
       manifestDigest: HOME_MOVE_REPLAY_EVIDENCE_MANIFEST_DIGEST,
       artifactCount: HOME_MOVE_REPLAY_EVIDENCE_ARTIFACT_COUNT,
     },
@@ -496,6 +498,13 @@ describe("WorldstateWorkbench", () => {
       screen.getByRole("button", { name: "Authorize fixture replay" }),
     ).toBeDisabled();
     expect(screen.getByText("Alternative placement")).toBeVisible();
+    expect(
+      screen.getByText(MOVING_COST_DELEGATION_PROFILE_ID),
+    ).toBeVisible();
+    expect(screen.getByText("Delegation profile proposal")).toBeVisible();
+    expect(
+      screen.queryByText("Accepted delegation profile"),
+    ).not.toBeInTheDocument();
 
     const pending = session.getSnapshot();
     expect(pending.activeDeltaId).not.toBeNull();
@@ -524,6 +533,12 @@ describe("WorldstateWorkbench", () => {
     expect(
       screen.getByRole("button", { name: "Prepare agent brief" }),
     ).toBeEnabled();
+    expect(screen.getByText("Accepted delegation profile")).toBeVisible();
+    expect(
+      screen.getByText(
+        `${MOVING_COST_DELEGATION_PROFILE_ID} · accepted, not run authority`,
+      ),
+    ).toBeVisible();
 
     const accepted = session.getSnapshot();
     expect(
@@ -668,6 +683,16 @@ describe("WorldstateWorkbench", () => {
     expect(screen.getByText(/Kept private \/ out of scope ·/i)).toBeVisible();
     expect(screen.getByText("npm test -- moving-cost")).toBeVisible();
     expect(screen.getByText("Prepared · not granted")).toBeVisible();
+    expect(
+      container.querySelectorAll(
+        `[data-delegation-profile-id="${MOVING_COST_DELEGATION_PROFILE_ID}"]`,
+      ),
+    ).toHaveLength(2);
+    expect(
+      screen.getByText(
+        "demo/moving-costs.html must import ./moving-costs.mjs exactly once, and demo/moving-costs.mjs must export calculateMovingTotalCents for independent fixed-vector verification.",
+      ),
+    ).toBeVisible();
 
     const briefEvidence = container.querySelector(
       "[data-evidence-anchor='agent-brief']",
@@ -695,13 +720,13 @@ describe("WorldstateWorkbench", () => {
     ).toBeDisabled();
     expect(onAgentDispatch).toHaveBeenCalledOnce();
     expect(screen.getByText("Returned · unverified")).toBeVisible();
-    expect(screen.getAllByText("home-move-fixture-replay-v0")).toHaveLength(2);
+    expect(screen.getAllByText(HOME_MOVE_REPLAY_IDENTITY)).toHaveLength(2);
     const exactExchangeEvidence = container.querySelector(
       "[data-evidence-anchor='exact-codex-exchange']",
     );
     expect(exactExchangeEvidence).toHaveTextContent("Binding coherent");
     expect(exactExchangeEvidence).toHaveTextContent(
-      "home-move-fixture-replay-v0",
+      HOME_MOVE_REPLAY_IDENTITY,
     );
     expect(
       screen.getByText("Worker claims Done criteria are satisfied"),

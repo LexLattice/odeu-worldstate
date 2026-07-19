@@ -46,7 +46,13 @@ describe("OpenAI placement parser", () => {
     });
 
     const parser = createOpenAIPlacementParser("test-key-never-sent");
-    const result = await parser({ request, model: "gpt-5.6" });
+    const signal = new AbortController().signal;
+    const result = await parser({
+      request,
+      model: "gpt-5.6",
+      signal,
+      timeoutMs: 12_000,
+    });
 
     expect(parse).toHaveBeenCalledOnce();
     expect(parse).toHaveBeenCalledWith(
@@ -61,6 +67,11 @@ describe("OpenAI placement parser", () => {
           }),
         },
       }),
+      {
+        signal,
+        timeout: 12_000,
+        maxRetries: 0,
+      },
     );
     expect(result).toEqual({
       responseId: "resp-1",

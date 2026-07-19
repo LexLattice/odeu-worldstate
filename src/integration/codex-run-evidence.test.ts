@@ -6,6 +6,10 @@ import {
   type AgentRunResponse,
 } from "@/adapters/codex/schema";
 import {
+  HOME_MOVE_REPLAY_IDENTITY,
+  HOME_MOVE_REPLAY_V0_IDENTITY,
+} from "@/adapters/replay-evidence/bundle";
+import {
   appendLedgerEvent,
   reduceWorldstateLedger,
   runAuthorizedEvent,
@@ -128,7 +132,7 @@ function replaySuccess(
       effectiveMode: "replay",
       status: "replayed",
       provider: "codex",
-      replayIdentity: "home-move-fixture-replay-v0",
+      replayIdentity: HOME_MOVE_REPLAY_IDENTITY,
       replayKind: "fixture",
     },
     events: [
@@ -244,7 +248,7 @@ function schemaValidSuccessWithOutcome(
       status: input.run.mode === "replay" ? "replayed" : outcome,
       provider: "codex",
       replayIdentity:
-        input.run.mode === "replay" ? "home-move-fixture-replay-v0" : null,
+        input.run.mode === "replay" ? HOME_MOVE_REPLAY_IDENTITY : null,
       replayKind: input.run.mode === "replay" ? "fixture" : null,
     },
     events: base.events.map((event, index) =>
@@ -400,6 +404,28 @@ describe("Codex run evidence", () => {
         response: schemaValidSuccessWithOutcome(bound, "returned"),
       }),
     ).not.toThrow();
+  });
+
+  it("rejects a historical replay identity on a new profile-bound request", () => {
+    const bound = authorizedFixture("replay");
+    const response = replaySuccess(bound);
+
+    expect(() =>
+      assertCodexRunResponseMatchesRun({
+        run: bound.run,
+        brief: bound.fixture.brief,
+        request: bound.request,
+        response: AgentRunSuccessSchema.parse({
+          ...response,
+          runtime: {
+            ...response.runtime,
+            replayIdentity: HOME_MOVE_REPLAY_V0_IDENTITY,
+          },
+        }),
+      }),
+    ).toThrow(
+      `response.runtime.replayIdentity must equal ${HOME_MOVE_REPLAY_IDENTITY}`,
+    );
   });
 
   it.each(["returned", "failed", "cancelled"] as const)(

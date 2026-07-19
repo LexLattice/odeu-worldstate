@@ -1,6 +1,6 @@
 import type { DemoWorldstate } from "./types";
 
-export const DEMO_REPLAY_ID = "home-move-fixture-replay-v0";
+export const DEMO_REPLAY_ID = "home-move-fixture-replay-v1";
 
 export const demoWorldstate: DemoWorldstate = {
   world: "Rose’s world",

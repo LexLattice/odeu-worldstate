@@ -20,6 +20,7 @@ import { createLiveWorkerClosureFixture } from "@/fixtures";
 import { authorizedCodexRunRequest } from "@/integration/authorized-codex-run";
 
 import { AgentRunFailureSchema } from "@/adapters/codex/schema";
+import { LiveCodexDeadlineExceededError } from "@/adapters/codex/live";
 
 import { POST } from "./route";
 
@@ -124,5 +125,36 @@ describe("POST /api/agent live private dispatch", () => {
     });
     expect(JSON.stringify(body)).not.toContain("/srv/private");
     expect(JSON.stringify(body)).not.toContain("index.lock");
+  });
+
+  it("returns a typed gateway timeout after bounded live cancellation", async () => {
+    vi.stubEnv("ODEU_CODEX_MODE", "live");
+    const request = authorizedRequest();
+    dispatch.mockImplementationOnce(
+      async (_request: unknown, execute: () => Promise<unknown>) => execute(),
+    );
+    worker.mockRejectedValueOnce(new LiveCodexDeadlineExceededError(300_000));
+
+    const httpResponse = await POST(
+      new Request("http://localhost/api/agent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      }),
+    );
+
+    expect(httpResponse.status).toBe(504);
+    await expect(httpResponse.json()).resolves.toMatchObject({
+      ok: false,
+      runtime: { effectiveMode: "live", status: "failed" },
+      error: {
+        code: "worker_timed_out",
+        message:
+          "The live worker exceeded its configured deadline. Its workspace is quarantined for operator inspection.",
+        issues: [],
+      },
+      briefPreserved: true,
+      resumable: false,
+    });
   });
 });

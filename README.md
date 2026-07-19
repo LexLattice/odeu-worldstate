@@ -208,6 +208,43 @@ Run the full local verification suite with:
 npm run verify
 ```
 
+To provision and prove the private local prerequisites for the application-backed
+live journey without reading a provider credential or making a provider call, run:
+
+```bash
+npm run smoke:application:live
+```
+
+The create-only default writes a private disposable Git runtime under
+`.working/application-live/runtime-v1`, publishes redacted readiness evidence at
+`.working/evidence/application-live-readiness-v1.json`, and exits successfully with
+`OPENAI_API_KEY` as the sole missing configuration. Its placeholder ledger is not a
+manual input: the existing live-authorization request atomically replaces it with the
+exact browser ledger before dispatch. Source the generated private
+`application-live.env`, then export `OPENAI_API_KEY` separately in process memory;
+that API key is the sole externally supplied application configuration. Start the
+application only when ready to perform the separately authorized manual journey and
+open exactly `http://localhost:3000`. Because the browser cannot read the server
+process environment, copy the generated `ODEU_OPERATOR_BEARER_SECRET` value into the
+workbench's **Transient operator authority** field when prompted. This generated
+bearer is a separate manual authority handoff: do not place it in a URL, browser
+storage, or shell history. To re-prove provider-capable readiness (still without
+starting the app or making a provider call), use a fresh runtime and evidence
+destination:
+
+```bash
+npm run smoke:application:live -- \
+  --mode provider-capable \
+  --allow-provider-capable-readiness \
+  --runtime-root .working/application-live/runtime-v2 \
+  --evidence-file .working/evidence/application-live-readiness-v2.json
+```
+
+CI additionally requires `--allow-ci-provider-capable-readiness`. The provisioner
+never overwrites a runtime or evidence file, never persists the provider credential,
+and its output grants no run, closure, candidate, reconciliation, or promotion
+authority.
+
 To separately check real Codex connectivity with an existing local ChatGPT login, run
 the explicitly gated diagnostic:
 

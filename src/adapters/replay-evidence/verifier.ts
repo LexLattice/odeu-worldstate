@@ -424,14 +424,14 @@ export async function verifyReplayEvidence(
       : "failed",
     verifier: {
       identity: HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
-      version: 1,
+      version: 2,
       kind: "independent_fixture",
     },
     bindings: bindingProjection(request),
     observedAt: (options.now ?? (() => new Date()))().toISOString(),
     bundle: {
       bundleId: HOME_MOVE_REPLAY_EVIDENCE_BUNDLE_ID,
-      version: 1,
+      version: 2,
       manifestDigest: HOME_MOVE_REPLAY_EVIDENCE_MANIFEST_DIGEST,
       artifactCount: HOME_MOVE_REPLAY_EVIDENCE_ARTIFACT_COUNT,
     },
@@ -449,7 +449,7 @@ export function replayEvidenceFailure(error: unknown): ReplayEvidenceFailure {
     ok: false,
     verifier: {
       identity: HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
-      version: 1,
+      version: 2,
       kind: "independent_fixture",
     },
     error: {

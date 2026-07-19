@@ -1,6 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+import { HOME_MOVE_REPLAY_IDENTITY } from "../../src/adapters/replay-evidence/bundle";
+
 const SOURCE =
   "Ask Codex to add a simple moving-cost comparison tool to my relocation project.";
 
@@ -138,7 +140,7 @@ test("stages, validates, reconciles, and explicitly integrates one replay result
   await page.getByRole("button", { name: "Authorize fixture replay" }).click();
 
   await expect(
-    page.getByText("Fixture replay · home-move-fixture-replay-v0"),
+    page.getByText(`Fixture replay · ${HOME_MOVE_REPLAY_IDENTITY}`),
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Lifecycle · returned" })).toBeVisible();
   await expect(page.getByText("Staged closure witness")).toBeVisible();
@@ -381,7 +383,7 @@ test("stages, validates, reconciles, and explicitly integrates one replay result
   await page.reload();
 
   await expect(
-    page.getByText("Fixture replay · home-move-fixture-replay-v0"),
+    page.getByText(`Fixture replay · ${HOME_MOVE_REPLAY_IDENTITY}`),
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Lifecycle · returned" })).toBeVisible();
   await expect(

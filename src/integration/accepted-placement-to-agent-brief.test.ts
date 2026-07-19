@@ -5,6 +5,8 @@ import {
   briefCompiledEvent,
   buildDeltaAcceptedEvent,
   deltaProposedEvent,
+  MOVING_COST_DELEGATION_PROFILE,
+  MOVING_COST_DELEGATION_PROFILE_ID,
   reduceWorldstateLedger,
   sourceCapturedEvent,
   type WorldstateDelta,
@@ -38,6 +40,9 @@ function acceptedDynamicTask(
     readonly uncertainty?: readonly string[];
     readonly title?: string;
     readonly description?: string;
+    readonly delegationProfileId?: typeof MOVING_COST_DELEGATION_PROFILE_ID | null;
+    readonly parentId?: string;
+    readonly convergentParentPath?: boolean;
   } = {},
 ): WorldstateLedger {
   const suffix = input.suffix ?? "runtime";
@@ -72,6 +77,13 @@ function acceptedDynamicTask(
           id: taskId,
           scopeId: HOME_MOVE_IDS.project,
           kind: "Task",
+          ...(input.delegationProfileId === null
+            ? {}
+            : {
+                delegationProfileId:
+                  input.delegationProfileId ??
+                  MOVING_COST_DELEGATION_PROFILE_ID,
+              }),
           title: input.title ?? "Compare provider quotes",
           description:
             input.description ??
@@ -91,11 +103,51 @@ function acceptedDynamicTask(
           scopeId: HOME_MOVE_IDS.project,
           kind: "belongs_to",
           fromNodeId: taskId,
-          toNodeId: HOME_MOVE_IDS.budget,
+          toNodeId: input.parentId ?? HOME_MOVE_IDS.budget,
           sourceRefs: [sourceId],
           data: {},
         },
       },
+      ...(input.convergentParentPath
+        ? ([
+            {
+              op: "node.add" as const,
+              node: {
+                id: `node-convergent-parent-${suffix}`,
+                scopeId: HOME_MOVE_IDS.project,
+                kind: "Idea" as const,
+                title: "Convergent Budget sub-area",
+                visibility: "shared" as const,
+                sourceRefs: [sourceId],
+                data: {},
+              },
+            },
+            {
+              op: "relation.add" as const,
+              relation: {
+                id: `relation-task-convergent-parent-${suffix}`,
+                scopeId: HOME_MOVE_IDS.project,
+                kind: "belongs_to" as const,
+                fromNodeId: taskId,
+                toNodeId: `node-convergent-parent-${suffix}`,
+                sourceRefs: [sourceId],
+                data: {},
+              },
+            },
+            {
+              op: "relation.add" as const,
+              relation: {
+                id: `relation-convergent-parent-budget-${suffix}`,
+                scopeId: HOME_MOVE_IDS.project,
+                kind: "belongs_to" as const,
+                fromNodeId: `node-convergent-parent-${suffix}`,
+                toNodeId: HOME_MOVE_IDS.budget,
+                sourceRefs: [sourceId],
+                data: {},
+              },
+            },
+          ])
+        : []),
     ],
     rationale: ["The comparison task belongs in the accepted Budget area."],
     sourceRefs: [sourceId],
@@ -140,7 +192,16 @@ describe("compileAcceptedPlacementAgentBrief", () => {
 
     expect(brief.targetNodeId).toBe(TASK_ID);
     expect(brief.targetNodeId).not.toBe(HOME_MOVE_IDS.compareQuotes);
+    expect(MOVING_COST_DELEGATION_PROFILE).toMatchObject({
+      expectedProjectId: HOME_MOVE_IDS.projectNode,
+      expectedAncestorId: HOME_MOVE_IDS.budget,
+      expectedGoalId: HOME_MOVE_IDS.goal,
+      expectedArtifactId: HOME_MOVE_IDS.artifact,
+    });
     expect(brief.baseRevisionId).toBe(state.canonical.head.id);
+    expect(brief.delegationProfileId).toBe(
+      MOVING_COST_DELEGATION_PROFILE_ID,
+    );
     expect(brief.sharedNodes.map((node) => node.id)).toEqual([
       HOME_MOVE_IDS.projectNode,
       HOME_MOVE_IDS.goal,
@@ -154,8 +215,15 @@ describe("compileAcceptedPlacementAgentBrief", () => {
     expect(brief.unknowns).toEqual([
       "Recurring storage costs may need a separate comparison.",
     ]);
-    expect(brief.constraints).toEqual([]);
+    expect(brief.constraints).toEqual([
+      "demo/moving-costs.html must import ./moving-costs.mjs exactly once, and demo/moving-costs.mjs must export calculateMovingTotalCents for independent fixed-vector verification.",
+    ]);
     expect(brief.expectedArtifacts).toEqual(["demo/moving-costs.html"]);
+    expect(brief.allowedActions).toEqual([
+      "Read files inside the disposable demo workspace",
+      "Edit only demo/moving-costs.html and demo/moving-costs.mjs",
+      "Run the declared focused test command",
+    ]);
     expect(brief.evidenceContract).toEqual({
       requirements: [
         {
@@ -236,6 +304,72 @@ describe("compileAcceptedPlacementAgentBrief", () => {
     expect(brief.unknowns).toEqual(["The later task has its own unresolved choice."]);
   });
 
+  it("binds the registered profile independently of editable title and description prose", () => {
+    const state = reduceWorldstateLedger(
+      acceptedDynamicTask(createHomeMoveSeedFixture().ledger, {
+        taskId: "candidate-renamed-moving-cost-task",
+        suffix: "renamed",
+        title: "Build a quote totaler",
+        description:
+          "A human-edited description that no longer matches the fixture wording.",
+      }),
+    );
+
+    const brief = compileAcceptedPlacementAgentBrief(state, {
+      briefId: "brief-renamed-moving-cost-task",
+      artifactBaseRef: "git:demo-base-001",
+    });
+
+    expect(brief.targetNodeId).toBe("candidate-renamed-moving-cost-task");
+    expect(brief.delegationProfileId).toBe(
+      MOVING_COST_DELEGATION_PROFILE_ID,
+    );
+  });
+
+  it("rejects a proposed profile whose accepted Task is outside its registered topology", () => {
+    const state = reduceWorldstateLedger(
+      acceptedDynamicTask(createHomeMoveSeedFixture().ledger, {
+        taskId: "candidate-moving-cost-in-packing",
+        suffix: "wrong-topology",
+        parentId: HOME_MOVE_IDS.packing,
+      }),
+    );
+
+    expect(() =>
+      compileAcceptedPlacementAgentBrief(state, {
+        briefId: "brief-wrong-moving-cost-topology",
+        artifactBaseRef: "git:demo-base-001",
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<AcceptedPlacementBriefError>>({
+        name: "AcceptedPlacementBriefError",
+        code: "accepted_task_topology_unsupported",
+      }),
+    );
+  });
+
+  it("rejects convergent topology when two distinct ancestor paths reach one Project", () => {
+    const state = reduceWorldstateLedger(
+      acceptedDynamicTask(createHomeMoveSeedFixture().ledger, {
+        taskId: "candidate-moving-cost-convergent",
+        suffix: "convergent",
+        convergentParentPath: true,
+      }),
+    );
+
+    expect(() =>
+      compileAcceptedPlacementAgentBrief(state, {
+        briefId: "brief-convergent-moving-cost-topology",
+        artifactBaseRef: "git:demo-base-001",
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<AcceptedPlacementBriefError>>({
+        name: "AcceptedPlacementBriefError",
+        code: "project_ambiguous",
+      }),
+    );
+  });
+
   it("fails closed when no accepted active Task exists", () => {
     expect(() =>
       compileAcceptedPlacementAgentBrief(createHomeMoveSeedFixture().state, {
@@ -257,6 +391,7 @@ describe("compileAcceptedPlacementAgentBrief", () => {
         suffix: "packing",
         title: "Add a packing checklist",
         description: "Create a reusable checklist for packing rooms.",
+        delegationProfileId: null,
       }),
     );
 

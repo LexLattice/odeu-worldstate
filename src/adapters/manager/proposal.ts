@@ -108,6 +108,7 @@ export function materializePlacementProposal(
     proposed: {
       nodeId: proposedNodeId,
       kind: interpretation.proposedKind,
+      delegationProfileId: interpretation.delegationProfileId,
       title: interpretation.proposedTitle,
       summary: interpretation.proposedSummary,
     },
@@ -166,6 +167,7 @@ export function materializePlacementProposal(
         node: {
           id: proposedNodeId,
           kind: interpretation.proposedKind,
+          delegationProfileId: interpretation.delegationProfileId,
           scopeId: request.projection.scopeId,
           title: interpretation.proposedTitle,
           summary: interpretation.proposedSummary,

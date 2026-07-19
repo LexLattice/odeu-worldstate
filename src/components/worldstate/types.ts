@@ -81,6 +81,7 @@ export interface PlacementSurface {
   locationLabel: string | null;
   breadcrumb: string[];
   proposedKind: string | null;
+  delegationProfileId: string | null;
   proposedTitle: string | null;
   proposedSummary: string | null;
   rationale: string | null;
@@ -127,6 +128,7 @@ export interface AgentBriefSurface {
   baseRevisionId: string;
   artifactBaseRef: string;
   targetNodeId: string;
+  delegationProfileId: string | null;
   goal: string;
   doneMeans: string[];
   unknowns: string[];

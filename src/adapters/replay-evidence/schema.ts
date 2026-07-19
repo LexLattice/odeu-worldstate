@@ -13,8 +13,15 @@ import {
   HOME_MOVE_REPLAY_EVIDENCE_MANIFEST_DIGEST,
   HOME_MOVE_REPLAY_EVIDENCE_RUNNER_ID,
   HOME_MOVE_REPLAY_EVIDENCE_TEST_COMMAND,
+  HOME_MOVE_REPLAY_EVIDENCE_V0_ARTIFACT_EVIDENCE_REF,
+  HOME_MOVE_REPLAY_EVIDENCE_V0_BUNDLE_ID,
+  HOME_MOVE_REPLAY_EVIDENCE_V0_MANIFEST_DIGEST,
+  HOME_MOVE_REPLAY_EVIDENCE_V0_TEST_EVIDENCE_REF_PREFIX,
+  HOME_MOVE_REPLAY_EVIDENCE_V0_VERIFIER_IDENTITY,
   HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
+  HOME_MOVE_REPLAY_IDENTITY,
   HOME_MOVE_REPLAY_TEST_EVIDENCE_REF_PREFIX,
+  HOME_MOVE_REPLAY_V0_IDENTITY,
 } from "./bundle";
 
 const StableId = z.string().trim().min(1).max(160);
@@ -67,15 +74,6 @@ export const ReplayEvidenceRequestSchema = ReplayEvidenceBindingsSchema.extend({
       requirementIds.add(requirement.requirementId);
     });
   });
-
-export const ReplayEvidenceArtifactObservationSchema = z
-  .object({
-    path: z.literal(HOME_MOVE_REPLAY_ARTIFACT_PATH),
-    digest: z.literal(HOME_MOVE_REPLAY_ARTIFACT_DIGEST),
-    byteLength: z.literal(HOME_MOVE_REPLAY_ARTIFACT_BYTE_LENGTH),
-    manifestDigest: z.literal(HOME_MOVE_REPLAY_EVIDENCE_MANIFEST_DIGEST),
-  })
-  .strict();
 
 export const ReplayEvidenceTestCaseObservationSchema = z
   .object({
@@ -130,146 +128,224 @@ export const ReplayEvidenceExecutionObservationSchema = z
     }
   });
 
-export const ReplayEvidenceObservationSchema = z
-  .object({
-    requirementId: StableId,
-    result: z.enum(["passed", "failed", "missing"]),
-    evidenceRef: z.string().trim().min(1).max(1_000),
-    detail: NonEmptyText,
-    artifact: ReplayEvidenceArtifactObservationSchema.nullable(),
-    execution: ReplayEvidenceExecutionObservationSchema.nullable(),
-  })
-  .strict()
-  .superRefine((observation, context) => {
-    if (observation.artifact !== null && observation.execution !== null) {
-      context.addIssue({
-        code: "custom",
-        path: ["execution"],
-        message: "One requirement observation cannot be both artifact and execution evidence.",
-      });
-    }
-    if (
-      observation.result === "passed" &&
-      observation.artifact === null &&
-      observation.execution === null
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["result"],
-        message: "A passing replay observation must carry registered artifact or execution evidence.",
-      });
-    }
-    if (
-      observation.result === "passed" &&
-      observation.execution !== null &&
-      observation.execution.passedCount !== observation.execution.totalCount
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["execution", "passedCount"],
-        message: "A passing execution observation requires every registered case to pass.",
-      });
-    }
-    if (
-      observation.artifact !== null &&
-      observation.evidenceRef !== HOME_MOVE_REPLAY_ARTIFACT_EVIDENCE_REF
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["evidenceRef"],
-        message: "Artifact evidence must use the registered fixture reference.",
-      });
-    }
-    if (
-      observation.execution !== null &&
-      observation.evidenceRef !==
-        `${HOME_MOVE_REPLAY_TEST_EVIDENCE_REF_PREFIX}${encodeURIComponent(
-          observation.requirementId,
-        )}/${HOME_MOVE_REPLAY_EVIDENCE_RUNNER_ID}`
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["evidenceRef"],
-        message: "Execution evidence must use the registered fixture-runner reference.",
-      });
-    }
-  });
+const V0 = {
+  replayIdentity: HOME_MOVE_REPLAY_V0_IDENTITY,
+  verifierIdentity: HOME_MOVE_REPLAY_EVIDENCE_V0_VERIFIER_IDENTITY,
+  verifierVersion: 1,
+  bundleId: HOME_MOVE_REPLAY_EVIDENCE_V0_BUNDLE_ID,
+  bundleVersion: 1,
+  manifestDigest: HOME_MOVE_REPLAY_EVIDENCE_V0_MANIFEST_DIGEST,
+  artifactEvidenceRef: HOME_MOVE_REPLAY_EVIDENCE_V0_ARTIFACT_EVIDENCE_REF,
+  testEvidenceRefPrefix: HOME_MOVE_REPLAY_EVIDENCE_V0_TEST_EVIDENCE_REF_PREFIX,
+} as const;
 
-export const ReplayEvidenceSuccessSchema = z
-  .object({
-    ok: z.literal(true),
-    status: z.enum(["passed", "failed"]),
-    verifier: z
-      .object({
-        identity: z.literal(HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY),
-        version: z.literal(1),
-        kind: z.literal("independent_fixture"),
-      })
-      .strict(),
-    bindings: ReplayEvidenceBindingsSchema,
-    observedAt: z.iso.datetime(),
-    bundle: z
-      .object({
-        bundleId: z.literal(HOME_MOVE_REPLAY_EVIDENCE_BUNDLE_ID),
-        version: z.literal(1),
-        manifestDigest: z.literal(HOME_MOVE_REPLAY_EVIDENCE_MANIFEST_DIGEST),
-        artifactCount: z.literal(HOME_MOVE_REPLAY_EVIDENCE_ARTIFACT_COUNT),
-      })
-      .strict(),
-    observations: z.array(ReplayEvidenceObservationSchema).min(1).max(24),
-  })
-  .strict()
-  .superRefine((response, context) => {
-    const requirementIds = new Set<string>();
-    response.observations.forEach((observation, index) => {
-      if (requirementIds.has(observation.requirementId)) {
+const V1 = {
+  replayIdentity: HOME_MOVE_REPLAY_IDENTITY,
+  verifierIdentity: HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
+  verifierVersion: 2,
+  bundleId: HOME_MOVE_REPLAY_EVIDENCE_BUNDLE_ID,
+  bundleVersion: 2,
+  manifestDigest: HOME_MOVE_REPLAY_EVIDENCE_MANIFEST_DIGEST,
+  artifactEvidenceRef: HOME_MOVE_REPLAY_ARTIFACT_EVIDENCE_REF,
+  testEvidenceRefPrefix: HOME_MOVE_REPLAY_TEST_EVIDENCE_REF_PREFIX,
+} as const;
+
+type ReplayEvidenceVersion = typeof V0 | typeof V1;
+
+function replayEvidenceArtifactObservationSchema<
+  const Version extends ReplayEvidenceVersion,
+>(version: Version) {
+  return z
+    .object({
+      path: z.literal(HOME_MOVE_REPLAY_ARTIFACT_PATH),
+      digest: z.literal(HOME_MOVE_REPLAY_ARTIFACT_DIGEST),
+      byteLength: z.literal(HOME_MOVE_REPLAY_ARTIFACT_BYTE_LENGTH),
+      manifestDigest: z.literal(version.manifestDigest),
+    })
+    .strict();
+}
+
+function replayEvidenceObservationSchema<
+  const Version extends ReplayEvidenceVersion,
+>(version: Version) {
+  return z
+    .object({
+      requirementId: StableId,
+      result: z.enum(["passed", "failed", "missing"]),
+      evidenceRef: z.string().trim().min(1).max(1_000),
+      detail: NonEmptyText,
+      artifact: replayEvidenceArtifactObservationSchema(version).nullable(),
+      execution: ReplayEvidenceExecutionObservationSchema.nullable(),
+    })
+    .strict()
+    .superRefine((observation, context) => {
+      if (observation.artifact !== null && observation.execution !== null) {
         context.addIssue({
           code: "custom",
-          path: ["observations", index, "requirementId"],
-          message: `Duplicate replay evidence observation: ${observation.requirementId}`,
+          path: ["execution"],
+          message: "One requirement observation cannot be both artifact and execution evidence.",
         });
       }
-      requirementIds.add(observation.requirementId);
+      if (
+        observation.result === "passed" &&
+        observation.artifact === null &&
+        observation.execution === null
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["result"],
+          message: "A passing replay observation must carry registered artifact or execution evidence.",
+        });
+      }
+      if (
+        observation.result === "passed" &&
+        observation.execution !== null &&
+        observation.execution.passedCount !== observation.execution.totalCount
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["execution", "passedCount"],
+          message: "A passing execution observation requires every registered case to pass.",
+        });
+      }
+      if (
+        observation.artifact !== null &&
+        observation.evidenceRef !== version.artifactEvidenceRef
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["evidenceRef"],
+          message: "Artifact evidence must use its versioned registered fixture reference.",
+        });
+      }
+      if (
+        observation.execution !== null &&
+        observation.evidenceRef !==
+          `${version.testEvidenceRefPrefix}${encodeURIComponent(
+            observation.requirementId,
+          )}/${HOME_MOVE_REPLAY_EVIDENCE_RUNNER_ID}`
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["evidenceRef"],
+          message: "Execution evidence must use its versioned fixture-runner reference.",
+        });
+      }
     });
-    const expectedStatus = response.observations.every(
-      (observation) => observation.result === "passed",
-    )
-      ? "passed"
-      : "failed";
-    if (response.status !== expectedStatus) {
-      context.addIssue({
-        code: "custom",
-        path: ["status"],
-        message: "Replay evidence status must reflect all requirement observations.",
+}
+
+function replayEvidenceSuccessSchema<const Version extends ReplayEvidenceVersion>(
+  version: Version,
+) {
+  return z
+    .object({
+      ok: z.literal(true),
+      status: z.enum(["passed", "failed"]),
+      verifier: z
+        .object({
+          identity: z.literal(version.verifierIdentity),
+          version: z.literal(version.verifierVersion),
+          kind: z.literal("independent_fixture"),
+        })
+        .strict(),
+      bindings: ReplayEvidenceBindingsSchema,
+      observedAt: z.iso.datetime(),
+      bundle: z
+        .object({
+          bundleId: z.literal(version.bundleId),
+          version: z.literal(version.bundleVersion),
+          manifestDigest: z.literal(version.manifestDigest),
+          artifactCount: z.literal(HOME_MOVE_REPLAY_EVIDENCE_ARTIFACT_COUNT),
+        })
+        .strict(),
+      observations: z
+        .array(replayEvidenceObservationSchema(version))
+        .min(1)
+        .max(24),
+    })
+    .strict()
+    .superRefine((response, context) => {
+      if (response.bindings.replayIdentity !== version.replayIdentity) {
+        context.addIssue({
+          code: "custom",
+          path: ["bindings", "replayIdentity"],
+          message: "Replay identity must match the versioned evidence bundle.",
+        });
+      }
+      const requirementIds = new Set<string>();
+      response.observations.forEach((observation, index) => {
+        if (requirementIds.has(observation.requirementId)) {
+          context.addIssue({
+            code: "custom",
+            path: ["observations", index, "requirementId"],
+            message: `Duplicate replay evidence observation: ${observation.requirementId}`,
+          });
+        }
+        requirementIds.add(observation.requirementId);
       });
-    }
-  });
+      const expectedStatus = response.observations.every(
+        (observation) => observation.result === "passed",
+      )
+        ? "passed"
+        : "failed";
+      if (response.status !== expectedStatus) {
+        context.addIssue({
+          code: "custom",
+          path: ["status"],
+          message: "Replay evidence status must reflect all requirement observations.",
+        });
+      }
+    });
+}
 
-export const ReplayEvidenceFailureSchema = z
-  .object({
-    ok: z.literal(false),
-    verifier: z
-      .object({
-        identity: z.literal(HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY),
-        version: z.literal(1),
-        kind: z.literal("independent_fixture"),
-      })
-      .strict(),
-    error: z
-      .object({
-        code: z.enum([
-          "invalid_request",
-          "replay_not_applicable",
-          "verification_unavailable",
-        ]),
-        message: NonEmptyText,
-        issues: z.array(NonEmptyText).max(40),
-      })
-      .strict(),
-  })
-  .strict();
+function replayEvidenceFailureSchema<const Version extends ReplayEvidenceVersion>(
+  version: Version,
+) {
+  return z
+    .object({
+      ok: z.literal(false),
+      verifier: z
+        .object({
+          identity: z.literal(version.verifierIdentity),
+          version: z.literal(version.verifierVersion),
+          kind: z.literal("independent_fixture"),
+        })
+        .strict(),
+      error: z
+        .object({
+          code: z.enum([
+            "invalid_request",
+            "replay_not_applicable",
+            "verification_unavailable",
+          ]),
+          message: NonEmptyText,
+          issues: z.array(NonEmptyText).max(40),
+        })
+        .strict(),
+    })
+    .strict();
+}
 
-export const ReplayEvidenceResponseSchema = z.discriminatedUnion("ok", [
+export const ReplayEvidenceV0ArtifactObservationSchema =
+  replayEvidenceArtifactObservationSchema(V0);
+export const ReplayEvidenceArtifactObservationSchema =
+  replayEvidenceArtifactObservationSchema(V1);
+export const ReplayEvidenceV0ObservationSchema =
+  replayEvidenceObservationSchema(V0);
+export const ReplayEvidenceObservationSchema = replayEvidenceObservationSchema(V1);
+export const ReplayEvidenceV0SuccessSchema = replayEvidenceSuccessSchema(V0);
+export const ReplayEvidenceV1SuccessSchema = replayEvidenceSuccessSchema(V1);
+export const ReplayEvidenceSuccessSchema = z.union([
+  ReplayEvidenceV1SuccessSchema,
+  ReplayEvidenceV0SuccessSchema,
+]);
+export const ReplayEvidenceV0FailureSchema = replayEvidenceFailureSchema(V0);
+export const ReplayEvidenceV1FailureSchema = replayEvidenceFailureSchema(V1);
+export const ReplayEvidenceFailureSchema = z.union([
+  ReplayEvidenceV1FailureSchema,
+  ReplayEvidenceV0FailureSchema,
+]);
+export const ReplayEvidenceResponseSchema = z.union([
   ReplayEvidenceSuccessSchema,
   ReplayEvidenceFailureSchema,
 ]);
@@ -282,8 +358,8 @@ export type ReplayEvidenceBindings = z.infer<
 >;
 export type ReplayEvidenceRequest = z.infer<typeof ReplayEvidenceRequestSchema>;
 export type ReplayEvidenceObservation = z.infer<
-  typeof ReplayEvidenceObservationSchema
->;
+  typeof ReplayEvidenceSuccessSchema
+>["observations"][number];
 export type ReplayEvidenceSuccess = z.infer<typeof ReplayEvidenceSuccessSchema>;
 export type ReplayEvidenceFailure = z.infer<typeof ReplayEvidenceFailureSchema>;
 export type ReplayEvidenceResponse = z.infer<typeof ReplayEvidenceResponseSchema>;

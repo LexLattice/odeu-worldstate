@@ -1,12 +1,14 @@
 import { z } from "zod";
 
 import { ArtifactCandidateReceiptSchema } from "@/adapters/artifact-promotion/schema";
+import { MOVING_COST_DELEGATION_PROFILE_ID } from "@/domain";
 
 export const LIVE_EVIDENCE_VERIFIER_IDENTITY =
   "odeu-live-candidate-evidence-verifier-v0";
 export const LIVE_EVIDENCE_RUNNER_ID =
   "odeu-moving-cost-host-harness-bwrap-prlimit-v1";
-export const LIVE_EVIDENCE_HARNESS_PROFILE_ID = "moving-cost-contract-v1";
+export const LIVE_EVIDENCE_HARNESS_PROFILE_ID =
+  MOVING_COST_DELEGATION_PROFILE_ID;
 export const LIVE_EVIDENCE_HARNESS_DIGEST =
   "sha256:234abcfb8f09413e71277d52c89c309609f26679e3a3d9921f48ffd8ce503e03";
 export const LIVE_EVIDENCE_TEST_COMMAND = "npm test -- moving-cost";

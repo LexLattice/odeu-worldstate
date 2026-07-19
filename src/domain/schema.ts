@@ -1,7 +1,12 @@
 import { z } from "zod";
 
+import { REGISTERED_DELEGATION_PROFILE_IDS } from "./delegation-profile";
+
 export const IdentifierSchema = z.string().trim().min(1);
 export const TimestampSchema = z.iso.datetime({ offset: true });
+export const DelegationProfileIdSchema = z.enum(
+  REGISTERED_DELEGATION_PROFILE_IDS,
+);
 
 export const ActorSchema = z
   .object({
@@ -64,6 +69,7 @@ export const WorldstateNodeInputSchema = z
     id: IdentifierSchema,
     scopeId: IdentifierSchema,
     kind: NodeKindSchema,
+    delegationProfileId: DelegationProfileIdSchema.optional(),
     title: z.string().trim().min(1),
     description: z.string().trim().min(1).optional(),
     visibility: z.enum(["shared", "private"]),
@@ -73,9 +79,18 @@ export const WorldstateNodeInputSchema = z
     sourceRefs: z.array(IdentifierSchema).default([]),
     data: RecordDataSchema.default({}),
   })
-  .strict();
+  .strict()
+  .superRefine((node, context) => {
+    if (node.delegationProfileId !== undefined && node.kind !== "Task") {
+      context.addIssue({
+        code: "custom",
+        path: ["delegationProfileId"],
+        message: "Only a Task may carry a registered delegation profile.",
+      });
+    }
+  });
 
-export const WorldstateNodeSchema = WorldstateNodeInputSchema.extend({
+export const WorldstateNodeSchema = WorldstateNodeInputSchema.safeExtend({
   createdRevisionId: IdentifierSchema,
   retiredRevisionId: IdentifierSchema.optional(),
 }).strict();
@@ -267,6 +282,7 @@ export const AgentBriefSchema = z
     baseRevisionId: IdentifierSchema,
     artifactBaseRef: z.string().trim().min(1),
     targetNodeId: IdentifierSchema,
+    delegationProfileId: DelegationProfileIdSchema.nullable().default(null),
     goal: z.string().trim().min(1),
     doneMeans: z.array(z.string().trim().min(1)).min(1),
     unknowns: z.array(z.string().trim().min(1)).default([]),

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { compileCodexPrompt } from "@/adapters/codex/prompt";
 import { runCodexReplay } from "@/adapters/codex/replay";
+import { HOME_MOVE_REPLAY_IDENTITY } from "@/adapters/replay-evidence";
 import { createPrivateProjectionFixture } from "@/fixtures";
 
 import { domainBriefToCodexRunRequest } from "./domain-brief-to-codex";
@@ -20,7 +21,7 @@ describe("home-move fixture execution boundary", () => {
     expect(result.runtime).toMatchObject({
       effectiveMode: "replay",
       replayKind: "fixture",
-      replayIdentity: "home-move-fixture-replay-v0",
+      replayIdentity: HOME_MOVE_REPLAY_IDENTITY,
     });
     expect(result.closure).toMatchObject({
       runId: fixture.ids.run,

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { ArtifactCandidateReceiptSchema } from "@/adapters/artifact-promotion/schema";
+import { DelegationProfileIdSchema } from "@/domain";
 
 const StableId = z.string().trim().min(1).max(160);
 const NonEmptyText = z.string().trim().min(1).max(8_000);
@@ -44,6 +45,7 @@ export const AgentBriefSchema = z.object({
   briefId: StableId,
   sourceRevisionId: StableId,
   artifactBaseRef: StableId,
+  delegationProfileId: DelegationProfileIdSchema.nullable().default(null),
   goal: NonEmptyText,
   doneMeans: z.array(NonEmptyText).min(1).max(24),
   environment: NonEmptyText,
@@ -359,6 +361,7 @@ export const AgentRunFailureSchema = z.object({
       "workspace_dirty",
       "workspace_private_data",
       "worker_blocked",
+      "worker_timed_out",
       "worker_failed",
     ]),
     message: NonEmptyText,

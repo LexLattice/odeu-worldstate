@@ -1,6 +1,10 @@
 import { ZodError } from "zod";
 
 import { deepFreeze, fingerprint, stableStringify } from "./determinism";
+import {
+  registeredDelegationProfile,
+  unexpectedDelegationProfileChangePaths,
+} from "./delegation-profile";
 import { KernelError, invariant } from "./errors";
 import {
   IdentifierSchema,
@@ -466,6 +470,59 @@ function validateBriefProjection(
   const sharedIds = new Set<string>();
   const visibleSourceRefs = (sourceRefs: readonly string[]): string[] =>
     sourceRefs.filter((sourceId) => state.operational.sources[sourceId]?.visibility === "shared");
+  const target = activeNode(state.canonical.nodes, brief.targetNodeId);
+  const targetDelegationProfileId = target.delegationProfileId ?? null;
+  invariant(
+    brief.delegationProfileId === targetDelegationProfileId,
+    "scope_violation",
+    `Brief ${brief.id} must retain the delegation profile accepted on target ${target.id}.`,
+    {
+      briefId: brief.id,
+      targetNodeId: target.id,
+      targetDelegationProfileId,
+      briefDelegationProfileId: brief.delegationProfileId,
+    },
+  );
+  if (brief.delegationProfileId !== null) {
+    const registeredProfile = registeredDelegationProfile(
+      brief.delegationProfileId,
+    );
+    const projectedProfile = {
+      goal: brief.goal,
+      doneMeans: brief.doneMeans,
+      constraints: brief.constraints,
+      expectedArtifacts: brief.expectedArtifacts,
+      environment: brief.environment,
+      agentProfile: brief.agentProfile,
+      allowedActions: brief.allowedActions,
+      deniedActions: brief.deniedActions,
+      confirmationRequired: brief.confirmationRequired,
+      evidenceContract: brief.evidenceContract,
+      escalationPath: brief.escalationPath,
+    };
+    const registeredContract = {
+      goal: registeredProfile.goal,
+      doneMeans: registeredProfile.doneMeans,
+      constraints: registeredProfile.constraints,
+      expectedArtifacts: registeredProfile.expectedArtifacts,
+      environment: registeredProfile.environment,
+      agentProfile: registeredProfile.agentProfile,
+      allowedActions: registeredProfile.allowedActions,
+      deniedActions: registeredProfile.deniedActions,
+      confirmationRequired: registeredProfile.confirmationRequired,
+      evidenceContract: registeredProfile.evidenceContract,
+      escalationPath: registeredProfile.escalationPath,
+    };
+    invariant(
+      stableStringify(projectedProfile) === stableStringify(registeredContract),
+      "scope_violation",
+      `Brief ${brief.id} does not match the host-registered ${brief.delegationProfileId} contract.`,
+      {
+        briefId: brief.id,
+        delegationProfileId: brief.delegationProfileId,
+      },
+    );
+  }
 
   for (const projectedNode of brief.sharedNodes) {
     invariant(
@@ -1418,6 +1475,26 @@ function applyEvent(state: WorldstateState, event: LedgerEvent): WorldstateState
         "evidence_gate_blocked",
         "The staged candidate does not change any artifact declared by the brief.",
         { promotionId: proposal.id },
+      );
+      invariant(
+        brief.delegationProfileId !== null,
+        "evidence_gate_blocked",
+        "Artifact promotion requires a registered delegation profile on the immutable brief.",
+        { promotionId: proposal.id, briefId: brief.id },
+      );
+      const unexpectedChangedPaths = unexpectedDelegationProfileChangePaths(
+        brief.delegationProfileId,
+        proposal.changedPaths.map((change) => change.path),
+      );
+      invariant(
+        unexpectedChangedPaths.length === 0,
+        "evidence_gate_blocked",
+        "The staged candidate exceeds its registered delegation profile's allowed-change envelope.",
+        {
+          promotionId: proposal.id,
+          delegationProfileId: brief.delegationProfileId,
+          unexpectedChangedPaths,
+        },
       );
       next = {
         ...state,

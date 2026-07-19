@@ -22,11 +22,13 @@ import {
 import { createPrivateProjectionFixture, HOME_MOVE_ACTORS } from "@/fixtures";
 import { authorizedCodexRunRequest } from "@/integration/authorized-codex-run";
 import {
+  CodexRunExchangeSchema,
   codexRunResponseEvents,
   parseCodexRunExchangeSource,
 } from "@/integration/codex-run-evidence";
 import {
   INDEPENDENT_LIVE_VALIDATOR_ACTOR,
+  LiveEvidenceValidationExchangeSchema,
   compileLiveEvidenceRequest,
   liveEvidenceValidationAttemptSourceEvent,
   liveEvidenceValidationExchangeSourceEvent,
@@ -509,6 +511,122 @@ describe("artifact promotion integration boundary", () => {
     expect(proposal.changedPaths).toEqual([
       { path: "demo/moving-costs.html", status: "modified" },
     ]);
+  });
+
+  it("rejects a promotion event whose changed paths exceed the durable profile envelope", () => {
+    const fixture = integratedLiveCandidateFixture();
+    const [sourceEvent, proposalEvent] = artifactPromotionProposalEvents({
+      state: reduceWorldstateLedger(fixture.ledger),
+      reconciliationDeltaId: fixture.deltaId,
+      sourceEventId: "event-extra-path-proposal-source",
+      sourceCommandId: "command-extra-path-proposal-source",
+      eventId: "event-extra-path-proposal",
+      commandId: "command-extra-path-proposal",
+      occurredAt: NOW,
+      systemActor: HOME_MOVE_ACTORS.system,
+    });
+    const ledgerWithReceipt = append(fixture.ledger, sourceEvent);
+    const forgedProposalEvent = {
+      ...proposalEvent,
+      payload: {
+        proposal: {
+          ...proposalEvent.payload.proposal,
+          changedPaths: [
+            ...proposalEvent.payload.proposal.changedPaths,
+            { path: "package.json", status: "modified" as const },
+          ],
+        },
+      },
+    };
+
+    expect(() => append(ledgerWithReceipt, forgedProposalEvent)).toThrow(
+      /registered delegation profile's allowed-change envelope/i,
+    );
+  });
+
+  it("refuses promotion when the durable candidate lineage adds an extra file", () => {
+    const fixture = integratedLiveCandidateFixture();
+    const state = reduceWorldstateLedger(fixture.ledger);
+    const validation = Object.values(state.operational.validations).find(
+      (candidate) => candidate.id === "validation-independent-live-promotion",
+    );
+    if (!validation) throw new Error("Missing validation fixture.");
+    const validationSource = state.operational.sources[validation.evidenceSourceId];
+    const validationExchange = LiveEvidenceValidationExchangeSchema.parse(
+      JSON.parse(validationSource.content),
+    );
+    const codexSource = state.operational.sources[
+      validationExchange.request.exchangeSourceId
+    ];
+    const codexExchange = CodexRunExchangeSchema.parse(
+      JSON.parse(codexSource.content),
+    );
+    if (!codexExchange.response.ok || !codexExchange.response.closure.artifactCandidate) {
+      throw new Error("Missing candidate fixture.");
+    }
+    const originalReceipt = codexExchange.response.closure.artifactCandidate;
+    const extraReceipt = ArtifactCandidateReceiptSchema.parse({
+      ...originalReceipt,
+      metadata: {
+        ...originalReceipt.metadata,
+        manifest: {
+          ...originalReceipt.metadata.manifest,
+          entries: [
+            ...originalReceipt.metadata.manifest.entries,
+            {
+              path: "package.json",
+              status: "modified",
+              oldMode: "100644",
+              newMode: "100644",
+              oldBlob: "8".repeat(40),
+              newBlob: "9".repeat(40),
+            },
+          ],
+        },
+      },
+    });
+    const amendedCodexExchange = CodexRunExchangeSchema.parse({
+      ...codexExchange,
+      response: {
+        ...codexExchange.response,
+        closure: {
+          ...codexExchange.response.closure,
+          artifactCandidate: extraReceipt,
+        },
+      },
+    });
+    const amendedValidationExchange = LiveEvidenceValidationExchangeSchema.parse({
+      ...validationExchange,
+      request: {
+        ...validationExchange.request,
+        candidateReceipt: extraReceipt,
+      },
+    });
+    const replaceSource = (source: typeof codexSource, artifact: unknown) => ({
+      ...source,
+      content: stableStringify(artifact),
+      integrity: { algorithm: "fnv1a64" as const, digest: fingerprint(artifact) },
+    });
+    const tamperedState = {
+      ...state,
+      operational: {
+        ...state.operational,
+        sources: {
+          ...state.operational.sources,
+          [codexSource.id]: replaceSource(codexSource, amendedCodexExchange),
+          [validationSource.id]: replaceSource(
+            validationSource,
+            amendedValidationExchange,
+          ),
+        },
+      },
+    };
+
+    expect(() =>
+      compileArtifactPromotionProposal(tamperedState, {
+        reconciliationDeltaId: fixture.deltaId,
+      }),
+    ).toThrow(/outside the exact moving-cost-contract-v1 allowed-change envelope/i);
   });
 
   it("persists the integrity-bound proposal before its manager event", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { runCodexReplay } from "@/adapters/codex/replay";
+import { HOME_MOVE_REPLAY_IDENTITY } from "@/adapters/replay-evidence";
 import { authorizedCodexRunRequest } from "@/integration/authorized-codex-run";
 import {
   invalidJsonPlacementResponse,
@@ -435,7 +436,7 @@ describe("buildWorkbenchViewModel", () => {
         effectiveMode: "replay",
         status: "replayed",
         provider: "codex",
-        replayIdentity: "home-move-fixture-replay-v0",
+        replayIdentity: HOME_MOVE_REPLAY_IDENTITY,
         replayKind: "fixture",
       },
       result: {
@@ -812,7 +813,7 @@ describe("buildWorkbenchViewModel", () => {
       exchangeEvidence: {
         disposition: "quarantined",
         requestRunId: run.id,
-        replayIdentity: "home-move-fixture-replay-v0",
+        replayIdentity: HOME_MOVE_REPLAY_IDENTITY,
         responseKind: "success",
       },
       normalizationFailure: {

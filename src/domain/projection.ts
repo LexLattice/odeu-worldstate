@@ -5,6 +5,7 @@ import {
   type EvidenceContract,
   type EvidenceContractInput,
 } from "./schema";
+import type { DelegationProfileId } from "./delegation-profile";
 import type { WorldstateState } from "./types";
 
 export interface CompileAgentBriefInput {
@@ -13,6 +14,7 @@ export interface CompileAgentBriefInput {
   readonly baseRevisionId: string;
   readonly artifactBaseRef: string;
   readonly targetNodeId: string;
+  readonly delegationProfileId: DelegationProfileId;
   /** Explicit allow-list. Anything else is denied by omission. */
   readonly shareNodeIds: readonly string[];
   readonly goal: string;
@@ -35,6 +37,7 @@ export interface AgentBriefPayload {
   readonly baseRevisionId: string;
   readonly artifactBaseRef: string;
   readonly targetNodeId: string;
+  readonly delegationProfileId: AgentBrief["delegationProfileId"];
   readonly goal: string;
   readonly doneMeans: readonly string[];
   readonly unknowns: readonly string[];
@@ -71,6 +74,16 @@ export function compileAgentBrief(
     "reference_missing",
     `Brief target ${input.targetNodeId} is not active.`,
     { targetNodeId: input.targetNodeId },
+  );
+  invariant(
+    target.delegationProfileId === input.delegationProfileId,
+    "scope_violation",
+    `Brief ${input.id} must retain the delegation profile accepted on target ${target.id}.`,
+    {
+      targetNodeId: target.id,
+      targetDelegationProfileId: target.delegationProfileId ?? null,
+      briefDelegationProfileId: input.delegationProfileId,
+    },
   );
 
   const shareIds = new Set(input.shareNodeIds);
@@ -126,6 +139,7 @@ export function compileAgentBrief(
     baseRevisionId: input.baseRevisionId,
     artifactBaseRef: input.artifactBaseRef,
     targetNodeId: input.targetNodeId,
+    delegationProfileId: input.delegationProfileId,
     goal: input.goal,
     doneMeans: input.doneMeans,
     unknowns: [...(input.unknowns ?? [])],
@@ -155,6 +169,7 @@ export function projectAgentBrief(brief: AgentBrief): AgentBriefPayload {
     baseRevisionId: brief.baseRevisionId,
     artifactBaseRef: brief.artifactBaseRef,
     targetNodeId: brief.targetNodeId,
+    delegationProfileId: brief.delegationProfileId,
     goal: brief.goal,
     doneMeans: [...brief.doneMeans],
     unknowns: [...brief.unknowns],

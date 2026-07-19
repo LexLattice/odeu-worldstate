@@ -13,13 +13,16 @@ import { domainBriefToCodexRunRequest } from "@/integration/domain-brief-to-code
 
 import { codexFailure, runCodexAdapter } from "./index";
 import {
+  finalizeLiveCodexWorkspaceLease,
   isolatedEnvironment,
   isolatedPreflightGitEnvironment,
   isolatedWorkerShellEnvironment,
   LiveCodexBlockedError,
+  LiveCodexDeadlineExceededError,
   observeExactDirectTargetCommit,
   runPreflightGit,
   unsafeIgnoredWorkspaceEntries,
+  withLiveCodexDeadline,
 } from "./live";
 
 const execFile = promisify(execFileCallback);
@@ -124,6 +127,82 @@ describe("codexFailure", () => {
       blockedRun: { workerThreadId: "thread-live-1" },
     });
     expect(failure).not.toHaveProperty("closure");
+  });
+
+  it("aborts an over-deadline live turn and exposes a typed terminal failure", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const operation = withLiveCodexDeadline(
+      (signal) =>
+        new Promise<never>((_resolve, reject) => {
+          observedSignal = signal;
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        }),
+      5,
+    );
+
+    await expect(operation).rejects.toMatchObject({
+      name: "LiveCodexDeadlineExceededError",
+      timeoutMs: 5,
+    });
+    expect(observedSignal?.aborted).toBe(true);
+
+    await expect(
+      withLiveCodexDeadline(async () => undefined, 2_147_483_648),
+    ).rejects.toMatchObject({
+      name: "LiveCodexConfigurationError",
+    });
+
+    const lease = {
+      release: vi.fn(async () => undefined),
+      retain: vi.fn(async () => undefined),
+    };
+    await finalizeLiveCodexWorkspaceLease(
+      lease,
+      new LiveCodexDeadlineExceededError(5),
+    );
+    expect(lease.retain).toHaveBeenCalledOnce();
+    expect(lease.release).not.toHaveBeenCalled();
+
+    const ordinaryLease = {
+      release: vi.fn(async () => undefined),
+      retain: vi.fn(async () => undefined),
+    };
+    await finalizeLiveCodexWorkspaceLease(ordinaryLease, new Error("failed"));
+    expect(ordinaryLease.release).toHaveBeenCalledOnce();
+    expect(ordinaryLease.retain).not.toHaveBeenCalled();
+
+    process.env.ODEU_CODEX_MODE = "live";
+    expect(codexFailure(new LiveCodexDeadlineExceededError(5))).toMatchObject({
+      ok: false,
+      runtime: { effectiveMode: "live", status: "failed" },
+      error: { code: "worker_timed_out" },
+      briefPreserved: true,
+      resumable: false,
+      blockedRun: null,
+    });
+  });
+
+  it("enforces the live turn deadline when the operation ignores cancellation", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const operation = withLiveCodexDeadline(
+      (signal) => {
+        observedSignal = signal;
+        return new Promise<never>(() => undefined);
+      },
+      5,
+    );
+
+    await expect(operation).rejects.toMatchObject({
+      name: "LiveCodexDeadlineExceededError",
+      timeoutMs: 5,
+    });
+    expect(observedSignal?.aborted).toBe(true);
+    expect(observedSignal?.reason).toMatchObject({
+      name: "LiveCodexDeadlineExceededError",
+      timeoutMs: 5,
+    });
   });
 
   it("rejects every ignored workspace root, including local dependency trees", () => {

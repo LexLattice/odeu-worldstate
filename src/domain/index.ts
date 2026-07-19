@@ -1,4 +1,5 @@
 export * from "./determinism";
+export * from "./delegation-profile";
 export * from "./errors";
 export * from "./events";
 export * from "./kernel";

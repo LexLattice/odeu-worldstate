@@ -96,6 +96,8 @@ export function placementResponseToKernelDelta(
     proposedNode.id !== parsed.receipt.proposed.nodeId ||
     proposedNode.scopeId !== parsed.receipt.scopeId ||
     proposedNode.kind !== parsed.receipt.proposed.kind ||
+    proposedNode.delegationProfileId !==
+      parsed.receipt.proposed.delegationProfileId ||
     proposedNode.title !== parsed.receipt.proposed.title ||
     proposedNode.summary !== parsed.receipt.proposed.summary ||
     proposedNode.originSourceId !== parsed.receipt.sourceId
@@ -138,6 +140,9 @@ export function placementResponseToKernelDelta(
           id: operation.node.id,
           scopeId: operation.node.scopeId,
           kind: operation.node.kind,
+          ...(operation.node.delegationProfileId === null
+            ? {}
+            : { delegationProfileId: operation.node.delegationProfileId }),
           title: operation.node.title,
           description: operation.node.summary,
           visibility: "shared",

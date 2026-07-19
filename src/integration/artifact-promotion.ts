@@ -16,6 +16,7 @@ import {
   fingerprint,
   sourceCapturedEvent,
   stableStringify,
+  unexpectedDelegationProfileChangePaths,
   type Actor,
   type ArtifactPromotionProposal,
   type EvidenceValidation,
@@ -470,6 +471,23 @@ export function compileArtifactPromotionProposal(
     )
   ) {
     issues.push("The candidate does not retain a changed artifact declared by the brief.");
+  }
+  if (brief) {
+    const unexpectedChangedPaths = brief.delegationProfileId
+      ? unexpectedDelegationProfileChangePaths(
+          brief.delegationProfileId,
+          candidate.manifest.entries.map((entry) => entry.path),
+        )
+      : [];
+    if (!brief.delegationProfileId) {
+      issues.push(
+        "The live brief has no registered delegation profile for artifact promotion.",
+      );
+    } else if (unexpectedChangedPaths.length > 0) {
+      issues.push(
+        `The candidate changes paths outside the exact ${brief.delegationProfileId} allowed-change envelope: ${unexpectedChangedPaths.join(", ")}.`,
+      );
+    }
   }
   if (issues.length > 0 || !closure || !run || !brief || !reconciliation || !artifactBaseCommit) {
     throw new ArtifactPromotionCompilationError(issues);

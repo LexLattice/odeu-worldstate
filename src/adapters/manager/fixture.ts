@@ -1,3 +1,5 @@
+import { MOVING_COST_DELEGATION_PROFILE_ID } from "@/domain";
+
 import {
   MANAGER_PROPOSED_SUMMARY_MAX_LENGTH,
   ManagerPlacementInterpretationSchema,
@@ -97,6 +99,7 @@ export function interpretFixturePlacement(
       locationLabel: "Project not selected",
       breadcrumb: ["World"],
       proposedKind: "Idea",
+      delegationProfileId: null,
       proposedTitle: titleFromSource(request.source.text),
       proposedSummary: sourceSummary.text,
       rationale:
@@ -126,6 +129,9 @@ export function interpretFixturePlacement(
     locationLabel: location.title,
     breadcrumb,
     proposedKind: "Task",
+    delegationProfileId: isCostComparison
+      ? MOVING_COST_DELEGATION_PROFILE_ID
+      : null,
     proposedTitle: titleFromSource(request.source.text),
     proposedSummary: isCostComparison
       ? "Create a small comparison tool for moving-provider costs and return focused implementation evidence."

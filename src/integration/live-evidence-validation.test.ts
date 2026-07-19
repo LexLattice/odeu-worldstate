@@ -61,6 +61,7 @@ function candidateReceipt(input: {
   readonly runId: string;
   readonly briefId: string;
   readonly baseRevisionId: string;
+  readonly extraChangedPath?: string;
 }) {
   return ArtifactCandidateReceiptSchema.parse({
     metadata: {
@@ -97,6 +98,18 @@ function candidateReceipt(input: {
             oldBlob: null,
             newBlob: ARTIFACT_BLOB,
           },
+          ...(input.extraChangedPath
+            ? [
+                {
+                  path: input.extraChangedPath,
+                  status: "added" as const,
+                  oldMode: null,
+                  newMode: "100644" as const,
+                  oldBlob: null,
+                  newBlob: "7".repeat(40),
+                },
+              ]
+            : []),
         ],
       },
     },
@@ -298,7 +311,9 @@ function liveValidationResponse(
   });
 }
 
-function returnedLiveFixture() {
+function returnedLiveFixture(
+  input: { readonly extraChangedPath?: string } = {},
+) {
   const fixture = createPrivateProjectionFixture({
     executionMode: "live",
     artifactBaseRef: `git:${BASE_COMMIT}`,
@@ -332,6 +347,7 @@ function returnedLiveFixture() {
     runId: run.id,
     briefId: fixture.brief.id,
     baseRevisionId: fixture.brief.baseRevisionId,
+    extraChangedPath: input.extraChangedPath,
   });
   const response = liveResponse({ request, receipt });
   for (const event of codexRunResponseEvents({
@@ -400,6 +416,28 @@ function appendValidationExchange(input: ReturnType<typeof returnedLiveFixture>)
 }
 
 describe("independent live-candidate evidence normalization", () => {
+  it("refuses to compile validation for a candidate outside its profile envelope", () => {
+    expect(() =>
+      returnedLiveFixture({ extraChangedPath: "package.json" }),
+    ).toThrow(
+      /changes paths outside the exact moving-cost-contract-v1 allowed-change envelope: package\.json/i,
+    );
+  });
+
+  it("keeps a legacy unbound brief ineligible for live validation", () => {
+    const fixture = returnedLiveFixture();
+    expect(() =>
+      compileLiveEvidenceRequest({
+        validationRequestId: "request-legacy-unbound-validation",
+        validationId: "validation-legacy-unbound",
+        run: fixture.run,
+        brief: { ...fixture.fixture.brief, delegationProfileId: null },
+        closure: fixture.closure,
+        codexExchange: fixture.codexExchange,
+      }),
+    ).toThrow(/no registered delegation profile for candidate validation/i);
+  });
+
   it("normalizes only an exact durable attempt and verifier exchange", () => {
     const fixture = returnedLiveFixture();
     const exchangedLedger = appendValidationExchange(fixture);

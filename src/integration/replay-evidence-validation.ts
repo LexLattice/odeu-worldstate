@@ -134,15 +134,25 @@ function equalIssue(
   }
 }
 
-export function compileReplayEvidenceRequest(input: {
+interface CompileReplayEvidenceRequestInput {
   readonly validationRequestId: string;
   readonly validationId: string;
   readonly run: AgentRun;
   readonly brief: AgentBrief;
   readonly closure: ClosureWitness;
   readonly codexExchange: CodexRunExchange;
-}): ReplayEvidenceRequest {
+}
+
+function compileReplayEvidenceRequestInternal(
+  input: CompileReplayEvidenceRequestInput,
+  allowLegacyReattestation: boolean,
+): ReplayEvidenceRequest {
   const { run, brief, closure, codexExchange } = input;
+  if (brief.delegationProfileId === null && !allowLegacyReattestation) {
+    throw new ReplayEvidenceValidationCoherenceError([
+      `Legacy brief ${brief.id} has no host-registered delegation profile and cannot start a new replay verification.`,
+    ]);
+  }
   const issues: string[] = [];
   equalIssue(issues, "run.briefId", run.briefId, brief.id);
   equalIssue(issues, "run.baseRevisionId", run.baseRevisionId, brief.baseRevisionId);
@@ -236,6 +246,12 @@ export function compileReplayEvidenceRequest(input: {
     ),
     expectedArtifacts: brief.expectedArtifacts,
   });
+}
+
+export function compileReplayEvidenceRequest(
+  input: CompileReplayEvidenceRequestInput,
+): ReplayEvidenceRequest {
+  return compileReplayEvidenceRequestInternal(input, false);
 }
 
 export function replayEvidenceValidationAttemptSourceEvent(input: {
@@ -501,14 +517,17 @@ export function replayEvidenceValidationRecordedEvent(input: {
     );
   } else if (closure && runProjection && brief) {
     try {
-      const recompiled = compileReplayEvidenceRequest({
-        validationRequestId: input.request.validationRequestId,
-        validationId: input.request.validationId,
-        run: runProjection.run,
-        brief,
-        closure,
-        codexExchange: durableCodexExchange,
-      });
+      const recompiled = compileReplayEvidenceRequestInternal(
+        {
+          validationRequestId: input.request.validationRequestId,
+          validationId: input.request.validationId,
+          run: runProjection.run,
+          brief,
+          closure,
+          codexExchange: durableCodexExchange,
+        },
+        true,
+      );
       if (stableStringify(recompiled) !== stableStringify(input.request)) {
         issues.push(
           "The validation request does not exactly recompile from the durable Codex exchange and current domain records.",

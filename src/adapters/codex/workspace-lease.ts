@@ -13,6 +13,7 @@ export class WorkspaceLeaseUnavailableError extends Error {
 
 export interface WorkspaceLease {
   release(): Promise<void>;
+  retain(): Promise<void>;
 }
 
 /**
@@ -44,13 +45,18 @@ export async function acquireWorkspaceLease(
     throw error;
   }
 
-  let released = false;
+  let state: "active" | "released" | "retained" = "active";
   return {
     async release() {
-      if (released) return;
-      released = true;
+      if (state !== "active") return;
+      state = "released";
       await handle.close();
       await unlink(path);
+    },
+    async retain() {
+      if (state !== "active") return;
+      state = "retained";
+      await handle.close();
     },
   };
 }

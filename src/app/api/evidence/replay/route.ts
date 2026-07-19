@@ -38,7 +38,7 @@ function invalidRequest(
       ok: false,
       verifier: {
         identity: HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
-        version: 1,
+        version: 2,
         kind: "independent_fixture",
       },
       error: {

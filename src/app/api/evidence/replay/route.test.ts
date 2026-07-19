@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { semanticReplayBriefDigest } from "@/adapters/codex/replay";
-import { HOME_MOVE_REPLAY_IDENTITY } from "@/adapters/replay-evidence/server";
+import {
+  HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
+  HOME_MOVE_REPLAY_IDENTITY,
+} from "@/adapters/replay-evidence/server";
 import { ReplayEvidenceRequestSchema } from "@/adapters/replay-evidence/schema";
 import { createPrivateProjectionFixture } from "@/fixtures";
 import { domainBriefToCodexRunRequest } from "@/integration/domain-brief-to-codex";
@@ -95,11 +98,19 @@ describe("POST /api/evidence/replay", () => {
     expect(malformed.status).toBe(400);
     await expect(malformed.json()).resolves.toMatchObject({
       ok: false,
+      verifier: {
+        identity: HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
+        version: 2,
+      },
       error: { code: "invalid_request" },
     });
     expect(inapplicable.status).toBe(409);
     await expect(inapplicable.json()).resolves.toMatchObject({
       ok: false,
+      verifier: {
+        identity: HOME_MOVE_REPLAY_EVIDENCE_VERIFIER_IDENTITY,
+        version: 2,
+      },
       error: { code: "replay_not_applicable" },
     });
   });
