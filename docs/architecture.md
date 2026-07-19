@@ -326,6 +326,27 @@ object. Those commands have no ledger, gateway, session, provider, or agent auth
 The opening stops at the source-capture handoff and, after ordinary sandbox bootstrap,
 adds no canonical event and advances no revision.
 
+A separate source-placement controller owns the next bounded chapter over the same
+mounted Workbench. It first requires `Budget` as the selected context; interactive mode
+waits for the person's selection, while watch-only may issue that one typed
+presentation command. The Workbench then changes from `presentation-only` to
+`guided-capture`: only the person may invoke source capture or an exact retry of the
+already durable source. Reset, semantic adoption, brief preparation, dispatch,
+validation, reconciliation, integration, promotion, and operator authorization remain
+disabled and are rechecked by their handlers.
+
+The guide observes a scalar read-only placement projection rather than a session or
+command capability. Completion requires the exact source, request, request-selected
+context, attempt, Manager exchange, receipt, candidate, pending delta, target location,
+placement base, and canonical head. Both the request-selected context and returned
+target must be `Budget`, with the base and head still equal to the chapter's pinned
+baseline.
+An explicit `Review placement` action moves focus to the receipt; the asynchronous
+Manager result does not move focus on its own. Finishing the chapter freezes those
+identifiers into a reviewable handoff. The handoff is evidence for a later decision,
+not semantic adoption, and closing the guide merely restores the Workbench's ordinary
+host gates.
+
 ### 4. Projection and agent boundary
 
 An agent does not receive the canonical worldstate. The projection compiler produces

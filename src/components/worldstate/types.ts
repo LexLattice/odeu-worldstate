@@ -74,10 +74,15 @@ export interface PlacementSurface {
   sourceId: string | null;
   sourceText: string | null;
   sourceCapturedAt: string | null;
+  requestId: string | null;
+  requestSelectedNodeId: string | null;
+  attemptId: string | null;
+  baseRevisionId: string | null;
   deltaId: string | null;
   candidateId: string | null;
   exchangeId: string | null;
   receiptId: string | null;
+  locationTargetNodeId: string | null;
   locationLabel: string | null;
   breadcrumb: string[];
   proposedKind: string | null;

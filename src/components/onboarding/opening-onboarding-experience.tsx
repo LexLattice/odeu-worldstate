@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import type { WorldstatePlacementObservation } from "@/components/worldstate/placement-observation";
 import type { WorldstatePresentationState } from "@/components/worldstate/presentation";
 import { WorldstateWorkbench } from "@/components/worldstate/worldstate-workbench";
 
@@ -14,8 +15,27 @@ import {
 } from "./opening-onboarding-controller";
 import type { OpeningOnboardingStepId } from "./opening-onboarding-script";
 import styles from "./opening-onboarding.module.css";
+import {
+  canStartSourcePlacementOnboarding,
+  createSourcePlacementOnboardingState,
+  deriveSourcePlacementOnboardingView,
+  reduceSourcePlacementOnboarding,
+  type SourcePlacementOnboardingAction,
+} from "./source-placement-onboarding-controller";
+import {
+  SOURCE_PLACEMENT_ONBOARDING_TARGETS,
+  type SourcePlacementOnboardingStepId,
+} from "./source-placement-onboarding-script";
 
-type HighlightTarget = "scope" | "outline" | "goal" | "capture";
+type HighlightTarget =
+  | "scope"
+  | "outline"
+  | "goal"
+  | "budget"
+  | "capture"
+  | "placement"
+  | "evidence"
+  | "decision";
 
 const MODE_COPY: Readonly<
   Record<
@@ -37,7 +57,7 @@ const MODE_COPY: Readonly<
   },
 };
 
-function highlightForStep(
+function highlightForOpeningStep(
   stepId: OpeningOnboardingStepId | undefined,
 ): HighlightTarget | undefined {
   switch (stepId) {
@@ -49,6 +69,22 @@ function highlightForStep(
       return "goal";
     case "source-capture-handoff":
       return "capture";
+    default:
+      return undefined;
+  }
+}
+
+function highlightForSourceStep(
+  stepId: SourcePlacementOnboardingStepId | undefined,
+  reviewReady: boolean,
+): HighlightTarget | undefined {
+  switch (stepId) {
+    case "select-budget-context":
+      return "budget";
+    case "capture-source":
+      return reviewReady ? "placement" : "capture";
+    case "review-placement":
+      return "evidence";
     default:
       return undefined;
   }
@@ -161,87 +197,362 @@ function observedViewLabel(value: string | undefined): string {
   return value ? `${observed[0].toUpperCase()}${observed.slice(1)}` : observed;
 }
 
+function sourceFact(observation: WorldstatePlacementObservation | null): string {
+  if (!observation) return "Loading…";
+  if (observation.sourceId) return "Saved";
+  if (
+    observation.operationState === "capturing" ||
+    observation.persistenceState === "saving"
+  ) {
+    return "Saving…";
+  }
+  return "Draft only";
+}
+
+function interpretationFact(
+  observation: WorldstatePlacementObservation | null,
+): string {
+  if (!observation) return "Loading…";
+  if (observation.operationState === "capturing") return "Saving source…";
+  if (observation.operationState === "placing") {
+    return "Finding where this fits…";
+  }
+  if (observation.operationState === "persisting_placement") {
+    return "Saving receipt…";
+  }
+
+  switch (observation.state) {
+    case "idle":
+      return "Not requested";
+    case "loading":
+      return "Finding where this fits…";
+    case "reviewable":
+      return "Reviewable · provisional";
+    case "needs_clarification":
+      return "Clarification needed";
+    case "failed":
+      return "Failed · source retained";
+    case "stale":
+      return "Stale · blocked";
+    case "adopted":
+      return "Already adopted";
+  }
+}
+
+function canonicalFact(
+  observation: WorldstatePlacementObservation | null,
+  baselineRevisionId: string | null,
+): string {
+  if (!observation?.headRevisionId) return "Loading…";
+  if (!baselineRevisionId) return `Current · ${observation.headRevisionId}`;
+  return observation.headRevisionId === baselineRevisionId
+    ? `Unchanged · ${observation.headRevisionId}`
+    : `Changed · ${observation.headRevisionId}`;
+}
+
+function focusWorkbench(frame: HTMLDivElement | null) {
+  frame
+    ?.querySelector<HTMLElement>("[data-presentation-focus-target='workbench']")
+    ?.focus();
+}
+
 export function OpeningOnboardingExperience() {
   const [onboarding, setOnboarding] = useState(createOpeningOnboardingState);
+  const [sourceOnboarding, setSourceOnboarding] = useState(
+    createSourcePlacementOnboardingState,
+  );
   const [presentation, setPresentation] =
     useState<WorldstatePresentationState | null>(null);
+  const [placement, setPlacement] =
+    useState<WorldstatePlacementObservation | null>(null);
   const [workbenchBusy, setWorkbenchBusy] = useState(false);
-  const guideHeadingRef = useRef<HTMLHeadingElement>(null);
-  const completionHeadingRef = useRef<HTMLHeadingElement>(null);
+  const openingGuideHeadingRef = useRef<HTMLHeadingElement>(null);
+  const openingCompletionHeadingRef = useRef<HTMLHeadingElement>(null);
+  const sourceGuideHeadingRef = useRef<HTMLHeadingElement>(null);
+  const sourceCompletionHeadingRef = useRef<HTMLHeadingElement>(null);
   const workbenchFrameRef = useRef<HTMLDivElement>(null);
-  const previousPhaseRef = useRef(onboarding.phase);
-  const previousStepIdRef = useRef<OpeningOnboardingStepId | null>(null);
-  const view = useMemo(
+  const focusReceiptOnSourceStepRef = useRef(false);
+  const previousOpeningPhaseRef = useRef(onboarding.phase);
+  const previousOpeningStepIdRef = useRef<OpeningOnboardingStepId | null>(null);
+  const previousSourcePhaseRef = useRef(sourceOnboarding.phase);
+  const previousSourceStepIdRef =
+    useRef<SourcePlacementOnboardingStepId | null>(null);
+  const openingView = useMemo(
     () => deriveOpeningOnboardingView(onboarding, presentation),
     [onboarding, presentation],
   );
-  const currentStepId = view.step?.id ?? null;
+  const sourceView = useMemo(
+    () =>
+      deriveSourcePlacementOnboardingView(sourceOnboarding, {
+        placement,
+        presentation,
+      }),
+    [placement, presentation, sourceOnboarding],
+  );
+  const currentOpeningStepId = openingView.step?.id ?? null;
+  const currentSourceStepId = sourceView.step?.id ?? null;
 
   useEffect(() => {
-    const previousPhase = previousPhaseRef.current;
-    const previousStepId = previousStepIdRef.current;
+    const previousPhase = previousOpeningPhaseRef.current;
+    const previousStepId = previousOpeningStepIdRef.current;
     if (
-      view.phase === "guiding" &&
-      (previousPhase !== "guiding" || previousStepId !== currentStepId)
+      openingView.phase === "guiding" &&
+      (previousPhase !== "guiding" ||
+        previousStepId !== currentOpeningStepId)
     ) {
-      guideHeadingRef.current?.focus();
-    } else if (view.phase === "complete" && previousPhase === "guiding") {
-      completionHeadingRef.current?.focus();
-    } else if (view.phase === "skipped" && previousPhase !== "skipped") {
-      workbenchFrameRef.current
-        ?.querySelector<HTMLElement>(
-          "[data-presentation-focus-target='workbench']",
-        )
-        ?.focus();
+      openingGuideHeadingRef.current?.focus();
+    } else if (
+      openingView.phase === "complete" &&
+      previousPhase === "guiding" &&
+      sourceView.phase === "inactive"
+    ) {
+      openingCompletionHeadingRef.current?.focus();
+    } else if (
+      openingView.phase === "skipped" &&
+      previousPhase !== "skipped"
+    ) {
+      focusWorkbench(workbenchFrameRef.current);
     }
-    previousPhaseRef.current = view.phase;
-    previousStepIdRef.current = currentStepId;
-  }, [currentStepId, view.phase]);
+    previousOpeningPhaseRef.current = openingView.phase;
+    previousOpeningStepIdRef.current = currentOpeningStepId;
+  }, [currentOpeningStepId, openingView.phase, sourceView.phase]);
 
-  const dispatch = (action: OpeningOnboardingAction) => {
+  useEffect(() => {
+    const previousPhase = previousSourcePhaseRef.current;
+    const previousStepId = previousSourceStepIdRef.current;
+    if (
+      sourceView.phase === "guiding" &&
+      (previousPhase !== "guiding" || previousStepId !== currentSourceStepId)
+    ) {
+      if (
+        focusReceiptOnSourceStepRef.current &&
+        currentSourceStepId === "review-placement"
+      ) {
+        focusReceiptOnSourceStepRef.current = false;
+        workbenchFrameRef.current
+          ?.querySelector<HTMLElement>(
+            "[data-placement-focus-target='receipt']",
+          )
+          ?.focus();
+      } else {
+        sourceGuideHeadingRef.current?.focus();
+      }
+    } else if (
+      sourceView.phase === "complete" &&
+      previousPhase === "guiding"
+    ) {
+      sourceCompletionHeadingRef.current?.focus();
+    } else if (
+      sourceView.phase === "skipped" &&
+      previousPhase !== "skipped"
+    ) {
+      focusWorkbench(workbenchFrameRef.current);
+    }
+    previousSourcePhaseRef.current = sourceView.phase;
+    previousSourceStepIdRef.current = currentSourceStepId;
+  }, [currentSourceStepId, sourceView.phase]);
+
+  const dispatchOpening = (action: OpeningOnboardingAction) => {
     setOnboarding((current) => reduceOpeningOnboarding(current, action));
   };
 
-  if (view.phase === "consent") {
+  const dispatchSource = (action: SourcePlacementOnboardingAction) => {
+    setSourceOnboarding((current) =>
+      reduceSourcePlacementOnboarding(current, action),
+    );
+  };
+
+  if (openingView.phase === "consent") {
     return (
       <div
         className={styles.experience}
         data-morphic-root="onboarding-experience"
+        data-onboarding-chapter="opening"
         data-onboarding-phase="consent"
       >
         <ConsentSurface
-          onChooseMode={(mode) => dispatch({ type: "choose_mode", mode })}
-          onSkip={() => dispatch({ type: "skip" })}
+          onChooseMode={(mode) =>
+            dispatchOpening({ type: "choose_mode", mode })
+          }
+          onSkip={() => dispatchOpening({ type: "skip" })}
         />
       </div>
     );
   }
 
-  const step = view.step;
-  const guideActive = view.phase === "guiding" && step !== null;
-  const highlight = highlightForStep(step?.id);
-  const canContinue = view.canContinue && presentation !== null;
-  const prerequisiteMessage = !presentation
+  const openingStep = openingView.step;
+  const sourceStep = sourceView.step;
+  const openingGuideActive =
+    openingView.phase === "guiding" && openingStep !== null;
+  const sourceGuideActive =
+    sourceView.phase === "guiding" && sourceStep !== null;
+  const sourceHasStarted = sourceView.phase !== "inactive";
+  const sourceComplete = sourceView.phase === "complete";
+  const sourceClosed = sourceView.phase === "skipped";
+  const openingClosed = openingView.phase === "skipped";
+  const guideActive = openingGuideActive || sourceGuideActive;
+  const openingCompletionVisible =
+    openingView.phase === "complete" && sourceView.phase === "inactive";
+  const sourceCompletionVisible = sourceComplete;
+  const canContinueOpening =
+    openingView.canContinue && presentation !== null;
+  const canStartSource =
+    canStartSourcePlacementOnboarding(placement) && !workbenchBusy;
+  const canContinueSource = sourceView.canContinue;
+  const sourceReviewReady =
+    sourceStep?.id === "capture-source" && canContinueSource;
+  const sourceRequestPending =
+    placement?.operationState === "capturing" ||
+    placement?.operationState === "placing" ||
+    placement?.operationState === "persisting_placement";
+  const workbenchMutationAccess =
+    openingClosed || sourceClosed
+      ? "enabled"
+      : sourceGuideActive || sourceComplete
+        ? "guided-capture"
+        : "presentation-only";
+  const activePresentationCommand = sourceGuideActive
+    ? sourceView.presentationCommand
+    : openingGuideActive
+      ? openingView.presentationCommand
+      : null;
+  const highlight: HighlightTarget | undefined = sourceComplete
+    ? "decision"
+    : sourceGuideActive
+      ? highlightForSourceStep(sourceStep?.id, sourceReviewReady)
+      : highlightForOpeningStep(openingStep?.id);
+  const activeChapter = sourceHasStarted ? "source-placement" : "opening";
+  const activePhase = sourceHasStarted ? sourceView.phase : openingView.phase;
+  const activeStep = sourceHasStarted ? sourceStep?.id : openingStep?.id;
+
+  const openingPrerequisiteMessage = !presentation
     ? "Waiting for the workbench to report its current project, view, and selection."
-    : view.paused
+    : openingView.paused
       ? "Guidance is paused. Resume to continue from this same step."
-      : view.prerequisiteSatisfied
+      : openingView.prerequisiteSatisfied
         ? "This presentation state is visible in the workbench. Continue when ready."
-        : view.mode === "watch_only"
-          ? `Applying a presentation-only command. ${step?.prerequisite ?? ""}`
-          : (step?.prerequisite ?? "Complete the visible presentation step.");
+        : openingView.mode === "watch_only"
+          ? `Applying a presentation-only command. ${openingStep?.prerequisite ?? ""}`
+          : (openingStep?.prerequisite ??
+            "Complete the visible presentation step.");
+
+  let sourcePrerequisiteMessage =
+    sourceStep?.prerequisite ?? "Complete the visible source-placement step.";
+  if (!presentation || !placement) {
+    sourcePrerequisiteMessage =
+      "Waiting for the workbench to report selection, persistence, and placement truth.";
+  } else if (sourceView.paused) {
+    sourcePrerequisiteMessage = sourceRequestPending
+      ? "Guidance is paused. The source request already in flight will continue; resume to inspect its result."
+      : "Guidance is paused. Resume to continue from this same step.";
+  } else if (sourceStep?.id === "select-budget-context") {
+    sourcePrerequisiteMessage = sourceView.prerequisiteSatisfied
+      ? "Budget is selected in the workbench. Continue when ready."
+      : sourceView.mode === "watch_only"
+        ? `Applying a presentation-only command. ${sourceStep.prerequisite}`
+        : sourceStep.prerequisite;
+  } else if (sourceStep?.id === "capture-source") {
+    if (placement.operationState === "capturing") {
+      sourcePrerequisiteMessage =
+        "Saving the exact source. Do not repeat the capture action.";
+    } else if (
+      placement.operationState === "placing" ||
+      placement.operationState === "persisting_placement" ||
+      placement.state === "loading"
+    ) {
+      sourcePrerequisiteMessage =
+        "Source saved. Finding where this fits; canonical worldstate remains unchanged.";
+    } else if (sourceReviewReady) {
+      sourcePrerequisiteMessage =
+        "A provisional receipt is ready. Review placement moves focus only; it does not adopt the candidate.";
+    } else if (placement.state === "failed") {
+      sourcePrerequisiteMessage = placement.retryable
+        ? placement.requestSelectedNodeId ===
+          SOURCE_PLACEMENT_ONBOARDING_TARGETS.budgetId
+          ? "Placement failed, but the source and exact Budget request remain saved. Retry from the preserved source in the workbench or exit the guide."
+          : "Placement failed from a request outside the required Budget context. Exact retry would preserve that context, so exit the guide to inspect the evidence."
+        : "Placement failed and exact retry is unavailable. The source remains saved; exit the guide to inspect the evidence.";
+    } else if (placement.state === "needs_clarification") {
+      sourcePrerequisiteMessage =
+        "The manager needs clarification. Nothing was adopted; exit the guide to retain and inspect the saved evidence.";
+    } else if (placement.state === "stale") {
+      sourcePrerequisiteMessage =
+        "The receipt is stale against the current revision. Adoption stays blocked; exit the guide to inspect the saved evidence.";
+    } else if (placement.state === "reviewable") {
+      sourcePrerequisiteMessage =
+        placement.requestSelectedNodeId !==
+          SOURCE_PLACEMENT_ONBOARDING_TARGETS.budgetId
+          ? "The durable request was captured outside the required Budget context. This receipt cannot complete the chapter; exit to inspect it without adoption."
+          : "The provisional receipt does not satisfy the exact current lineage required by this chapter. Exit to inspect it without adoption.";
+    }
+  } else if (sourceStep?.id === "review-placement" && canContinueSource) {
+    sourcePrerequisiteMessage =
+      "The receipt and its evidence are visible. Finish this chapter before the separate adoption decision becomes available.";
+  }
+
+  const sourceContinueLabel =
+    sourceStep?.id === "capture-source"
+      ? sourceReviewReady
+        ? "Review placement"
+        : "Waiting for placement"
+      : sourceStep?.id === "review-placement"
+        ? "Finish source chapter"
+        : "Continue";
+  const sourceExitTruth = placement?.sourceId
+    ? "Exiting keeps the saved source and any placement evidence. It does not adopt them; the normal host gates return after the current operation settles."
+    : "Exiting before capture saves nothing and restores the normal workbench gates.";
+  const canonicalLabel = canonicalFact(
+    placement,
+    sourceView.baselineRevisionId,
+  );
+  const canonicalTruth = !placement?.headRevisionId
+    ? "loading"
+    : placement.headRevisionId === sourceView.baselineRevisionId
+      ? "unchanged"
+      : "changed";
+  const openingCompletionMessage = workbenchBusy
+    ? "The workbench is still reporting its state. Guided placement and replay wait until it is idle. Close guide restores the normal host gates without performing an action."
+    : !placement
+      ? "Waiting for the workbench to report durable placement state. Start guided placement remains unavailable; Replay opening or Close guide are available."
+      : placement.state === "adopted"
+        ? "This sandbox already contains an adopted placement, so a fresh guided-placement chapter is unavailable. Replay opening remains presentation-only; Close guide restores normal host gates."
+        : placement.state === "needs_clarification"
+          ? "The saved placement needs clarification, which this chapter cannot resolve. Replay opening remains presentation-only; Close guide restores the normal host inspection gates."
+          : placement.state === "stale"
+            ? "The saved placement is stale against the canonical head, so guided review cannot resume. Replay opening remains presentation-only; Close guide restores normal host gates."
+            : placement.state === "failed" && !placement.retryable
+              ? "The saved placement failed and exact retry is unavailable. Replay opening remains presentation-only; Close guide restores the normal host inspection gates."
+        : !canStartSource
+          ? "The current placement does not have an actionable capture, exact Budget retry, or complete current Budget receipt. Replay opening remains presentation-only; Close guide restores normal host gates."
+          : "Opening changed presentation only. Start guided placement allows one user-owned source capture and, only if needed, an exact-source retry while adoption and agent work stay locked; Replay remains presentation-only; Close guide restores normal host gates.";
+
+  const continueSource = () => {
+    if (sourceStep?.id === "capture-source" && sourceReviewReady) {
+      focusReceiptOnSourceStepRef.current = true;
+    }
+    dispatchSource({
+      type: "continue",
+      placement,
+      presentation,
+    });
+  };
 
   return (
     <div
       className={styles.experience}
       data-highlight={highlight}
       data-morphic-root="onboarding-experience"
-      data-onboarding-mode={view.mode ?? undefined}
-      data-onboarding-phase={view.phase}
-      data-onboarding-step={step?.id}
+      data-onboarding-chapter={activeChapter}
+      data-onboarding-mode={
+        sourceHasStarted
+          ? (sourceView.mode ?? undefined)
+          : (openingView.mode ?? undefined)
+      }
+      data-onboarding-phase={activePhase}
+      data-onboarding-step={activeStep}
     >
       <div className={styles.guideShell}>
-        {guideActive ? (
+        {openingGuideActive ? (
           <section
             aria-labelledby="opening-guide-heading"
             className={styles.guideRegion}
@@ -251,7 +562,7 @@ export function OpeningOnboardingExperience() {
               className={styles.chapterLane}
               data-morphic-lane="chapter-status"
               data-state-surface={
-                view.paused
+                openingView.paused
                   ? "warning-status-surface"
                   : "diagnostic-status-surface"
               }
@@ -259,12 +570,14 @@ export function OpeningOnboardingExperience() {
               <span className={styles.laneLabel}>Opening orientation</span>
               <div className={styles.progressLine}>
                 <span className={styles.progressPill}>
-                  Step {view.stepNumber} of {view.stepCount}
+                  Step {openingView.stepNumber} of {openingView.stepCount}
                 </span>
                 <span className={styles.modePill}>
-                  {view.mode === "watch_only" ? "Watch only" : "Interactive"}
+                  {openingView.mode === "watch_only"
+                    ? "Watch only"
+                    : "Interactive"}
                 </span>
-                {view.paused ? (
+                {openingView.paused ? (
                   <span className={styles.pausedPill}>Paused</span>
                 ) : null}
               </div>
@@ -276,21 +589,31 @@ export function OpeningOnboardingExperience() {
 
             <div className={styles.captionLane} data-morphic-lane="captions">
               <div aria-live="polite" className={styles.guideCopy}>
-                <h2 id="opening-guide-heading" ref={guideHeadingRef} tabIndex={-1}>
-                  {step.title}
+                <h2
+                  id="opening-guide-heading"
+                  ref={openingGuideHeadingRef}
+                  tabIndex={-1}
+                >
+                  {openingStep.title}
                 </h2>
-                {view.captionsVisible ? (
-                  <p className={styles.caption}>{step.caption}</p>
+                {openingView.captionsVisible ? (
+                  <p className={styles.caption}>{openingStep.caption}</p>
                 ) : (
                   <p className={styles.captionHidden}>
                     Captions hidden. Use Show captions to restore them.
                   </p>
                 )}
               </div>
-              <p className={styles.audioTruth} data-audio-state={view.audioState}>
+              <p
+                className={styles.audioTruth}
+                data-audio-state={openingView.audioState}
+              >
                 Narration audio is unavailable in this build.
               </p>
-              <div aria-label="Observed presentation state" className={styles.stateFacts}>
+              <div
+                aria-label="Observed presentation state"
+                className={styles.stateFacts}
+              >
                 <span className={styles.stateFact}>
                   <span>Project</span>
                   <strong
@@ -329,33 +652,39 @@ export function OpeningOnboardingExperience() {
               <div>
                 <div className={styles.secondaryControls}>
                   <button
-                    aria-pressed={view.captionsVisible}
+                    aria-pressed={openingView.captionsVisible}
                     className={styles.secondaryButton}
                     data-onboarding-action="toggle-captions"
                     onClick={() =>
-                      dispatch({
+                      dispatchOpening({
                         type: "set_captions",
-                        visible: !view.captionsVisible,
+                        visible: !openingView.captionsVisible,
                       })
                     }
                     type="button"
                   >
-                    {view.captionsVisible ? "Hide captions" : "Show captions"}
+                    {openingView.captionsVisible
+                      ? "Hide captions"
+                      : "Show captions"}
                   </button>
                   <button
                     className={styles.secondaryButton}
-                    data-onboarding-action={view.paused ? "resume" : "pause"}
+                    data-onboarding-action={
+                      openingView.paused ? "resume" : "pause"
+                    }
                     onClick={() =>
-                      dispatch({ type: view.paused ? "resume" : "pause" })
+                      dispatchOpening({
+                        type: openingView.paused ? "resume" : "pause",
+                      })
                     }
                     type="button"
                   >
-                    {view.paused ? "Resume" : "Pause"}
+                    {openingView.paused ? "Resume" : "Pause"}
                   </button>
                   <button
                     className={styles.secondaryButton}
                     data-onboarding-action="skip"
-                    onClick={() => dispatch({ type: "skip" })}
+                    onClick={() => dispatchOpening({ type: "skip" })}
                     type="button"
                   >
                     Skip guide
@@ -366,20 +695,20 @@ export function OpeningOnboardingExperience() {
                   className={styles.prerequisite}
                   id="opening-guide-prerequisite"
                 >
-                  {prerequisiteMessage}
+                  {openingPrerequisiteMessage}
                 </p>
               </div>
               <button
                 aria-describedby="opening-guide-prerequisite"
                 className={styles.continueButton}
                 data-onboarding-action="continue"
-                disabled={!canContinue}
+                disabled={!canContinueOpening}
                 onClick={() =>
-                  dispatch({ type: "continue", presentation })
+                  dispatchOpening({ type: "continue", presentation })
                 }
                 type="button"
               >
-                {view.stepNumber === view.stepCount
+                {openingView.stepNumber === openingView.stepCount
                   ? "Finish opening"
                   : "Continue"}
               </button>
@@ -387,38 +716,284 @@ export function OpeningOnboardingExperience() {
           </section>
         ) : null}
 
-        {view.phase === "complete" ? (
+        {openingCompletionVisible ? (
           <section
-            aria-label="Opening complete"
+            aria-labelledby="opening-completion-heading"
             className={styles.completionRegion}
+            data-completion-kind="opening"
             data-morphic-region="onboarding-completion"
             data-state-surface="diagnostic-status-surface"
           >
             <div className={styles.completionCopy} role="status">
-              <h2 ref={completionHeadingRef} tabIndex={-1}>
-                Opening complete · normal workbench available
+              <h2
+                id="opening-completion-heading"
+                ref={openingCompletionHeadingRef}
+                tabIndex={-1}
+              >
+                Opening complete · choose the next boundary
               </h2>
-              <span id="opening-replay-status">
-                {workbenchBusy
-                  ? "A workbench operation is still in flight. Replay unlocks after it settles so no ongoing write or provider call crosses into guidance."
-                  : "The guide changed presentation only. Source capture, semantic commit, and agent authority remain separate workbench actions."}
+              <span id="opening-next-step-status">
+                {openingCompletionMessage}
               </span>
             </div>
-            <div className={styles.completionActions}>
+            <div
+              className={styles.completionActions}
+              data-action-cluster="opening-completion-choice"
+            >
               <button
-                aria-describedby="opening-replay-status"
+                aria-describedby="opening-next-step-status"
+                className={styles.startButton}
+                data-onboarding-action="start-guided-placement"
+                disabled={!canStartSource}
+                onClick={() =>
+                  dispatchSource({
+                    type: "start",
+                    captionsVisible: openingView.captionsVisible,
+                    mode: openingView.mode ?? "interactive",
+                    placement,
+                  })
+                }
+                type="button"
+              >
+                Start guided placement
+              </button>
+              <button
+                aria-describedby="opening-next-step-status"
                 className={styles.replayButton}
                 data-onboarding-action="replay"
                 disabled={workbenchBusy}
-                onClick={() => dispatch({ type: "replay" })}
+                onClick={() => dispatchOpening({ type: "replay" })}
                 type="button"
               >
                 Replay opening
               </button>
               <button
+                aria-describedby="opening-next-step-status"
                 className={styles.secondaryButton}
                 data-onboarding-action="close"
-                onClick={() => dispatch({ type: "skip" })}
+                onClick={() => dispatchOpening({ type: "skip" })}
+                type="button"
+              >
+                Close guide
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {sourceGuideActive ? (
+          <section
+            aria-labelledby="source-placement-guide-heading"
+            className={styles.guideRegion}
+            data-morphic-region="onboarding-guide"
+            data-onboarding-guide="source-placement"
+          >
+            <div
+              className={styles.chapterLane}
+              data-morphic-lane="chapter-status"
+              data-state-surface={
+                sourceView.paused
+                  ? "warning-status-surface"
+                  : sourceStep.id === "review-placement"
+                    ? "provisional-status-surface"
+                    : "diagnostic-status-surface"
+              }
+            >
+              <span className={styles.laneLabel}>Source placement</span>
+              <div className={styles.progressLine}>
+                <span className={styles.progressPill}>
+                  Step {sourceView.stepNumber} of {sourceView.stepCount}
+                </span>
+                <span className={styles.modePill}>
+                  {sourceView.mode === "watch_only"
+                    ? "Guided · capture stays yours"
+                    : "Interactive"}
+                </span>
+                {sourceView.paused ? (
+                  <span className={styles.pausedPill}>Paused</span>
+                ) : null}
+              </div>
+              <p className={styles.chapterSummary}>
+                Capture and exact placement retry only · adoption, reset, and
+                agent work stay locked through this chapter.
+              </p>
+            </div>
+
+            <div className={styles.captionLane} data-morphic-lane="captions">
+              <div aria-live="polite" className={styles.guideCopy}>
+                <h2
+                  id="source-placement-guide-heading"
+                  ref={sourceGuideHeadingRef}
+                  tabIndex={-1}
+                >
+                  {sourceStep.title}
+                </h2>
+                {sourceView.captionsVisible ? (
+                  <p className={styles.caption}>{sourceStep.caption}</p>
+                ) : (
+                  <p className={styles.captionHidden}>
+                    Captions hidden. Use Show captions to restore them.
+                  </p>
+                )}
+              </div>
+              <p
+                className={styles.audioTruth}
+                data-audio-state={sourceView.audioState}
+              >
+                Narration audio is unavailable in this build.
+              </p>
+              <div
+                aria-label="Observed source placement state"
+                className={styles.stateFacts}
+                data-morphic-lane="source-placement-truth"
+              >
+                <span className={styles.stateFact}>
+                  <span>Source</span>
+                  <strong
+                    data-truth-state={placement?.sourceId ? "saved" : "draft"}
+                    title={placement?.sourceId ?? "No durable source yet"}
+                  >
+                    {sourceFact(placement)}
+                  </strong>
+                </span>
+                <span className={styles.stateFact}>
+                  <span>Interpretation</span>
+                  <strong
+                    data-truth-state={placement?.state ?? "loading"}
+                    title={placement?.managerLabel}
+                  >
+                    {interpretationFact(placement)}
+                  </strong>
+                </span>
+                <span className={styles.stateFact}>
+                  <span>Canonical</span>
+                  <strong
+                    data-truth-state={canonicalTruth}
+                    title={placement?.headRevisionId ?? undefined}
+                  >
+                    {canonicalLabel}
+                  </strong>
+                </span>
+              </div>
+            </div>
+
+            <div
+              className={styles.controlLane}
+              data-action-cluster="onboarding-source-placement-controls"
+              data-morphic-lane="playback-controls"
+            >
+              <div>
+                <div className={styles.secondaryControls}>
+                  <button
+                    aria-pressed={sourceView.captionsVisible}
+                    className={styles.secondaryButton}
+                    data-onboarding-action="toggle-captions"
+                    onClick={() =>
+                      dispatchSource({
+                        type: "set_captions",
+                        visible: !sourceView.captionsVisible,
+                      })
+                    }
+                    type="button"
+                  >
+                    {sourceView.captionsVisible
+                      ? "Hide captions"
+                      : "Show captions"}
+                  </button>
+                  <button
+                    className={styles.secondaryButton}
+                    data-onboarding-action={
+                      sourceView.paused ? "resume" : "pause"
+                    }
+                    onClick={() =>
+                      dispatchSource({
+                        type: sourceView.paused ? "resume" : "pause",
+                      })
+                    }
+                    type="button"
+                  >
+                    {sourceView.paused ? "Resume" : "Pause"}
+                  </button>
+                  <button
+                    aria-describedby="source-guide-exit-truth"
+                    className={styles.secondaryButton}
+                    data-onboarding-action="skip"
+                    onClick={() => dispatchSource({ type: "skip" })}
+                    type="button"
+                  >
+                    Exit source guide
+                  </button>
+                </div>
+                <p
+                  aria-live="polite"
+                  className={styles.prerequisite}
+                  id="source-guide-prerequisite"
+                >
+                  {sourcePrerequisiteMessage}
+                </p>
+                <p className={styles.exitTruth} id="source-guide-exit-truth">
+                  {sourceExitTruth}
+                </p>
+              </div>
+              <button
+                aria-describedby="source-guide-prerequisite"
+                className={styles.continueButton}
+                data-onboarding-action="continue"
+                disabled={!canContinueSource}
+                onClick={continueSource}
+                type="button"
+              >
+                {sourceContinueLabel}
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {sourceCompletionVisible ? (
+          <section
+            aria-labelledby="source-placement-completion-heading"
+            className={styles.completionRegion}
+            data-completion-kind="source-placement"
+            data-morphic-region="onboarding-completion"
+            data-state-surface="provisional-status-surface"
+          >
+            <div className={styles.completionCopy} role="status">
+              <h2
+                id="source-placement-completion-heading"
+                ref={sourceCompletionHeadingRef}
+                tabIndex={-1}
+              >
+                Source placement reviewed · decision remains separate
+              </h2>
+              <span id="source-placement-completion-status">
+                The exact source and provisional placement evidence are saved.
+                Canonical revision {sourceView.baselineRevisionId ?? "unknown"} is
+                unchanged. Adoption and agent work remain locked. Review again
+                changes presentation only; Close guide restores the host decision
+                gate without adopting anything.
+              </span>
+            </div>
+            <div
+              className={styles.completionActions}
+              data-action-cluster="source-placement-completion-choice"
+            >
+              <button
+                aria-describedby="source-placement-completion-status"
+                className={styles.replayButton}
+                data-onboarding-action="replay-review"
+                disabled={workbenchBusy}
+                onClick={() => {
+                  focusReceiptOnSourceStepRef.current = true;
+                  dispatchSource({ type: "replay_review" });
+                }}
+                type="button"
+              >
+                Review placement again
+              </button>
+              <button
+                aria-describedby="source-placement-completion-status"
+                className={styles.startButton}
+                data-onboarding-action="close"
+                onClick={() => dispatchSource({ type: "skip" })}
                 type="button"
               >
                 Close guide
@@ -433,10 +1008,11 @@ export function OpeningOnboardingExperience() {
           ref={workbenchFrameRef}
         >
           <WorldstateWorkbench
-            mutationAccess={guideActive ? "presentation-only" : "enabled"}
+            mutationAccess={workbenchMutationAccess}
             onOperationBusyChange={setWorkbenchBusy}
+            onPlacementObservationChange={setPlacement}
             onPresentationStateChange={setPresentation}
-            presentationCommand={view.presentationCommand ?? undefined}
+            presentationCommand={activePresentationCommand ?? undefined}
           />
         </div>
       </div>

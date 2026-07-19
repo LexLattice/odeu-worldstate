@@ -307,9 +307,14 @@
   gap: 0.45rem;
 }
 
+.completionActions {
+  justify-content: flex-end;
+}
+
 .secondaryButton,
 .continueButton,
-.replayButton {
+.replayButton,
+.startButton {
   min-height: 2.25rem;
   border: 1px solid var(--line);
   border-radius: 0.45rem;
@@ -322,7 +327,8 @@
 }
 
 .secondaryButton:hover,
-.replayButton:hover {
+.replayButton:hover,
+.startButton:hover:not(:disabled) {
   border-color: var(--line-strong);
   color: var(--paper);
 }
@@ -340,7 +346,8 @@
 
 .continueButton:disabled,
 .secondaryButton:disabled,
-.replayButton:disabled {
+.replayButton:disabled,
+.startButton:disabled {
   cursor: not-allowed;
   opacity: 0.48;
 }
@@ -350,6 +357,13 @@
   color: var(--muted);
   font-size: 0.62rem;
   line-height: 1.45;
+}
+
+.exitTruth {
+  margin-top: 0.28rem !important;
+  color: var(--faint);
+  font-size: 0.58rem;
+  line-height: 1.4;
 }
 
 .stateFacts {
@@ -372,6 +386,25 @@
   white-space: nowrap;
 }
 
+.stateFact strong[data-truth-state="saved"],
+.stateFact strong[data-truth-state="unchanged"] {
+  color: var(--mint);
+}
+
+.stateFact strong[data-truth-state="reviewable"] {
+  color: var(--coral);
+}
+
+.stateFact strong[data-truth-state="needs_clarification"],
+.stateFact strong[data-truth-state="stale"],
+.stateFact strong[data-truth-state="changed"] {
+  color: var(--amber);
+}
+
+.stateFact strong[data-truth-state="failed"] {
+  color: var(--danger);
+}
+
 .workbenchFrame {
   position: relative;
 }
@@ -389,12 +422,27 @@
 .experience[data-highlight="projection"] :global([data-morphic-region="projection"]),
 .experience[data-highlight="outline"] :global(#projection-tab-outline),
 .experience[data-highlight="goal"] :global([data-worldstate-id="node-goal-under-4000"]),
-.experience[data-highlight="capture"] :global(textarea[aria-label="Source text"]) {
+.experience[data-highlight="budget"] :global([data-worldstate-id="node-area-budget"]),
+.experience[data-highlight="capture"] :global([data-onboarding-target="source-capture"]) {
   position: relative;
   z-index: 22;
   outline: 2px solid rgba(147, 201, 255, 0.82);
   outline-offset: 3px;
   box-shadow: 0 0 0 0.35rem rgba(147, 201, 255, 0.08);
+}
+
+.experience[data-highlight="placement"] :global([data-morphic-region="interpretation"]),
+.experience[data-highlight="evidence"] :global([data-morphic-region="evidence"]),
+.experience[data-highlight="decision"] :global([data-morphic-region="semantic-commit"]) {
+  outline: 2px solid rgba(147, 201, 255, 0.82);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 0.35rem rgba(147, 201, 255, 0.08);
+}
+
+.experience :global([data-placement-focus-target="receipt"]),
+.experience :global([data-morphic-region="evidence"]),
+.experience :global([data-morphic-region="semantic-commit"]) {
+  scroll-margin-top: 1rem;
 }
 
 .completionRegion {
@@ -427,6 +475,21 @@
 .replayButton {
   border-color: rgba(147, 201, 255, 0.28);
   color: var(--sky);
+}
+
+.startButton {
+  border-color: rgba(147, 201, 255, 0.42);
+  background: rgba(147, 201, 255, 0.1);
+  color: var(--sky);
+}
+
+.startButton:hover:not(:disabled) {
+  background: rgba(147, 201, 255, 0.16);
+}
+
+.completionRegion[data-completion-kind="source-placement"]
+  .completionCopy h2 {
+  color: var(--coral);
 }
 
 @media (max-width: 900px) {
@@ -502,8 +565,12 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .completionActions,
-  .replayButton {
+  .completionActions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .completionActions > button {
     width: 100%;
   }
 }
@@ -512,7 +579,8 @@
   .modeChoice,
   .secondaryButton,
   .continueButton,
-  .replayButton {
+  .replayButton,
+  .startButton {
     transition: none;
   }
 }

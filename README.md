@@ -85,6 +85,13 @@ The transcript remains inspectable as provenance.
   presentation-only project, view, and object-selection commands; the chapter stops
   at the source-capture handoff without adding a canonical event, advancing a
   revision, calling a provider, or granting agent authority.
+- A separate guided source-placement chapter that first establishes `Budget` as the
+  exact working context, then enables only user-invoked capture and exact-source retry.
+  It persists the source, request/attempt with its exact selected context, Manager
+  exchange/receipt, and pending delta, keeps the canonical head unchanged, and hands
+  off a frozen reviewable receipt.
+  Semantic adoption, reset, and every agent or promotion action remain locked until
+  the guide is explicitly closed.
 - A durable, least-context browser brief preview compiled from the latest accepted
   Task, with shared context, local private/out-of-scope omission receipts, immutable
   revision and artifact bindings, authority limits, unknowns, and evidence requirements.
@@ -155,9 +162,9 @@ creation. It is not an authorized ODEU run and cannot produce closure, candidate
 reconciliation, or promotion evidence. The application's provider-key-backed live
 route and live placement remain unobserved because neither `OPENAI_API_KEY` nor
 `CODEX_API_KEY` is configured. Remaining product work includes that end-to-end live
-route evidence, the later source-capture-through-reconciliation onboarding chapters,
-voice capture, correction/defer/reject controls, multi-project routing, and Codex
-thread resume.
+route evidence, the later semantic-adoption-through-reconciliation onboarding
+chapters, voice capture, correction/defer/reject controls, multi-project routing, and
+Codex thread resume.
 
 ## Example journey
 
@@ -349,7 +356,11 @@ turn and an artifact whose exact bytes and final workspace contract were host-ve
 The event stream does not establish which tool causally created that artifact. No
 provider-key-backed application live run has been observed because `OPENAI_API_KEY`
 and `CODEX_API_KEY` remain absent; the diagnostic creates no application authority or
-durable run lineage.
+durable run lineage. On 2026-07-19, onboarding was extended with a separate guided
+source-placement chapter: it establishes Budget context, permits only human capture or
+exact-source retry, persists a provisional receipt and its exact lineage, and freezes
+that reviewable handoff while the canonical revision stays unchanged and all later
+authority gates remain closed.
 
 Unit, integration, browser-journey, responsive, and automated accessibility checks
 cover the implemented foundation. Passing tests establish contract behavior in this

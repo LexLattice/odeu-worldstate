@@ -9,10 +9,24 @@ const onboardingRoot = (page: Page) =>
 const workbenchRoot = (page: Page) =>
   page.locator("[data-morphic-root='worldstate-workbench']");
 
-async function persistedLedgerEventCount(page: Page): Promise<number> {
+interface PersistedLedgerSummary {
+  readonly total: number;
+  readonly humanSourceIds: readonly string[];
+  readonly placementAttemptIds: readonly string[];
+  readonly placementExchangeIds: readonly string[];
+  readonly pendingDeltaIds: readonly string[];
+  readonly acceptedCount: number;
+  readonly briefCount: number;
+  readonly runCount: number;
+  readonly closureCount: number;
+}
+
+async function persistedLedgerSummary(
+  page: Page,
+): Promise<PersistedLedgerSummary> {
   return page.evaluate(
     () =>
-      new Promise<number>((resolve, reject) => {
+      new Promise<PersistedLedgerSummary>((resolve, reject) => {
         const openRequest = indexedDB.open("odeu-worldstate");
         openRequest.onerror = () => reject(openRequest.error);
         openRequest.onsuccess = () => {
@@ -27,14 +41,67 @@ async function persistedLedgerEventCount(page: Page): Promise<number> {
           getRequest.onerror = () => reject(getRequest.error);
           getRequest.onsuccess = () => {
             const document = getRequest.result as
-              | { events?: unknown[] }
+              | {
+                  events?: Array<{
+                    type?: string;
+                    payload?: {
+                      source?: { id?: string; kind?: string };
+                      delta?: { id?: string };
+                    };
+                  }>;
+                }
               | undefined;
+            const events = document?.events ?? [];
+            const sourceIds = events.flatMap((event) => {
+              const source = event.payload?.source;
+              return event.type === "source.captured" && source?.id
+                ? [source]
+                : [];
+            });
             database.close();
-            resolve(document?.events?.length ?? 0);
+            resolve({
+              total: events.length,
+              humanSourceIds: sourceIds
+                .filter((source) => source.kind === "text")
+                .map((source) => source.id as string)
+                .sort(),
+              placementAttemptIds: sourceIds
+                .map((source) => source.id as string)
+                .filter((id) => id.startsWith("source-placement-attempt:"))
+                .sort(),
+              placementExchangeIds: sourceIds
+                .map((source) => source.id as string)
+                .filter((id) => id.startsWith("source-placement-exchange:"))
+                .sort(),
+              pendingDeltaIds: events
+                .flatMap((event) =>
+                  event.type === "delta.proposed" &&
+                  event.payload?.delta?.id
+                    ? [event.payload.delta.id]
+                    : [],
+                )
+                .sort(),
+              acceptedCount: events.filter(
+                (event) => event.type === "delta.accepted",
+              ).length,
+              briefCount: events.filter(
+                (event) => event.type === "brief.compiled",
+              ).length,
+              runCount: events.filter(
+                (event) => event.type === "run.authorized",
+              ).length,
+              closureCount: events.filter(
+                (event) => event.type === "closure.staged",
+              ).length,
+            });
           };
         };
       }),
   );
+}
+
+async function persistedLedgerEventCount(page: Page): Promise<number> {
+  return (await persistedLedgerSummary(page)).total;
 }
 
 async function chooseMode(page: Page, mode: "Interactive" | "Watch only") {
@@ -43,6 +110,107 @@ async function chooseMode(page: Page, mode: "Interactive" | "Watch only") {
   await expect(workbenchRoot(page)).toHaveAttribute(
     "data-worldstate-revision",
     /.+/,
+  );
+}
+
+async function completeOpening(
+  page: Page,
+  mode: "Interactive" | "Watch only",
+) {
+  await chooseMode(page, mode);
+  const onboarding = onboardingRoot(page);
+  const workbench = workbenchRoot(page);
+  const continueButton = page.getByRole("button", {
+    name: "Continue",
+    exact: true,
+  });
+
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "establish-project",
+  );
+  await expect(continueButton).toBeEnabled();
+  await continueButton.click();
+
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "select-outline",
+  );
+  if (mode === "Interactive") {
+    await page.getByRole("tab", { name: /Outline:/i }).click();
+  }
+  await expect(workbench).toHaveAttribute("data-view", "outline");
+  await expect(continueButton).toBeEnabled();
+  await continueButton.click();
+
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "select-goal",
+  );
+  if (mode === "Interactive") {
+    await page
+      .getByRole("button", {
+        name: /Complete the move for less than €4,000/i,
+      })
+      .click();
+  }
+  await expect(workbench).toHaveAttribute(
+    "data-selected-object-id",
+    HOME_MOVE_IDS.goal,
+  );
+  await expect(continueButton).toBeEnabled();
+  await continueButton.click();
+
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "source-capture-handoff",
+  );
+  await page.getByRole("button", { name: "Finish opening" }).click();
+  await expect(onboarding).toHaveAttribute("data-onboarding-phase", "complete");
+  await expect(
+    page.getByRole("heading", {
+      name: "Opening complete · choose the next boundary",
+    }),
+  ).toBeFocused();
+}
+
+async function startSourcePlacementGuide(
+  page: Page,
+  mode: "Interactive" | "Watch only",
+) {
+  const onboarding = onboardingRoot(page);
+  const workbench = workbenchRoot(page);
+  await page
+    .getByRole("button", { name: "Start guided placement" })
+    .click();
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-chapter",
+    "source-placement",
+  );
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "select-budget-context",
+  );
+  await expect(workbench).toHaveAttribute(
+    "data-mutation-access",
+    "guided-capture",
+  );
+  if (mode === "Interactive") {
+    await workbench
+      .locator(`[data-worldstate-id='${HOME_MOVE_IDS.budget}']`)
+      .first()
+      .click();
+  }
+  await expect(workbench).toHaveAttribute(
+    "data-selected-object-id",
+    HOME_MOVE_IDS.budget,
+  );
+  await page
+    .getByRole("button", { name: "Continue", exact: true })
+    .click();
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "capture-source",
   );
 }
 
@@ -197,20 +365,26 @@ test("interactive guidance advances only after the user makes each presentation 
 
   await expect(onboarding).toHaveAttribute("data-onboarding-phase", "complete");
   await expect(
-    page.getByText("Opening complete · normal workbench available", {
+    page.getByText("Opening complete · choose the next boundary", {
       exact: true,
     }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", {
-      name: "Opening complete · normal workbench available",
+      name: "Opening complete · choose the next boundary",
     }),
   ).toBeFocused();
-  await expect(workbench).toHaveAttribute("data-mutation-access", "enabled");
+  await expect(workbench).toHaveAttribute(
+    "data-mutation-access",
+    "presentation-only",
+  );
   await expect(
     page.getByRole("button", { name: "Capture & place" }),
+  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Reset sandbox" })).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Start guided placement" }),
   ).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Reset sandbox" })).toBeEnabled();
   await page.getByRole("button", { name: "Close guide" }).click();
   await expect(onboarding).toHaveAttribute("data-onboarding-phase", "skipped");
   await expect(workbench).toBeFocused();
@@ -312,4 +486,320 @@ test("watch-only guidance uses state-derived presentation commands without ledge
     .include("[data-morphic-root='onboarding-experience']")
     .analyze();
   expect(guidedAccessibility.violations).toEqual([]);
+});
+
+test("guided placement persists one exact provisional lineage and waits for a separate adoption decision", async ({
+  page,
+}) => {
+  let placementCalls = 0;
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/api/placement"
+    ) {
+      placementCalls += 1;
+    }
+  });
+
+  await completeOpening(page, "Interactive");
+  const onboarding = onboardingRoot(page);
+  const workbench = workbenchRoot(page);
+  const initialRevision = await workbench.getAttribute(
+    "data-worldstate-revision",
+  );
+  const initialRevisionId = initialRevision?.split(" · ").at(-1);
+  const before = await persistedLedgerSummary(page);
+
+  await expect(workbench).toHaveAttribute(
+    "data-mutation-access",
+    "presentation-only",
+  );
+  await startSourcePlacementGuide(page, "Interactive");
+  await expect(page.getByRole("button", { name: "Reset sandbox" })).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Adopt this placement" }),
+  ).toBeDisabled();
+
+  await page.getByRole("button", { name: "Capture & place" }).click();
+  await expect(page.getByText("Suggested · canonical unchanged")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Review placement" }),
+  ).toBeEnabled();
+  expect(placementCalls).toBe(1);
+
+  const sourceEvidence = page.locator(
+    "[data-evidence-anchor='source-utterance'] small",
+  );
+  const requestEvidence = page.locator(
+    "[data-evidence-anchor='placement-request'] small",
+  );
+  const exchangeEvidence = page.locator(
+    "[data-evidence-anchor='placement-exchange'] small",
+  );
+  const deltaEvidence = page.locator(
+    "[data-evidence-anchor='pending-delta'] small",
+  );
+  const baseEvidence = page.locator(
+    "[data-evidence-anchor='placement-base-revision'] small",
+  );
+  await expect(sourceEvidence).toHaveText(/^source:/);
+  await expect(requestEvidence).toContainText(/request:/);
+  await expect(requestEvidence).toContainText(/source-placement-attempt:/);
+  await expect(requestEvidence).toContainText(
+    `selected context ${HOME_MOVE_IDS.budget}`,
+  );
+  await expect(exchangeEvidence).toContainText(/source-placement-exchange:/);
+  await expect(exchangeEvidence).toContainText(/receipt-/);
+  await expect(deltaEvidence).toHaveText(/delta-/);
+  await expect(baseEvidence).toHaveText(initialRevisionId as string);
+  await expect(workbench).toHaveAttribute(
+    "data-worldstate-revision",
+    initialRevision as string,
+  );
+
+  const afterPlacement = await persistedLedgerSummary(page);
+  expect(afterPlacement.humanSourceIds).toHaveLength(
+    before.humanSourceIds.length + 1,
+  );
+  expect(afterPlacement.placementAttemptIds).toHaveLength(
+    before.placementAttemptIds.length + 1,
+  );
+  expect(afterPlacement.placementExchangeIds).toHaveLength(
+    before.placementExchangeIds.length + 1,
+  );
+  expect(afterPlacement.pendingDeltaIds).toHaveLength(
+    before.pendingDeltaIds.length + 1,
+  );
+  expect(afterPlacement.acceptedCount).toBe(before.acceptedCount);
+  expect(afterPlacement.briefCount).toBe(before.briefCount);
+  expect(afterPlacement.runCount).toBe(before.runCount);
+  expect(afterPlacement.closureCount).toBe(before.closureCount);
+
+  const receiptHeading = page.getByRole("heading", {
+    name: "Placement receipt",
+  });
+  await expect(receiptHeading).not.toBeFocused();
+  await page.getByRole("button", { name: "Review placement" }).click();
+  await expect(receiptHeading).toBeFocused();
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "review-placement",
+  );
+
+  const receiptAccessibility = await new AxeBuilder({ page })
+    .include("[data-morphic-root='onboarding-experience']")
+    .analyze();
+  expect(receiptAccessibility.violations).toEqual([]);
+  const horizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(horizontalOverflow).toBeLessThanOrEqual(1);
+
+  await page
+    .getByRole("button", { name: "Finish source chapter" })
+    .click();
+  await expect(onboarding).toHaveAttribute("data-onboarding-phase", "complete");
+  await expect(
+    page.getByRole("heading", {
+      name: "Source placement reviewed · decision remains separate",
+    }),
+  ).toBeFocused();
+  await expect(workbench).toHaveAttribute(
+    "data-mutation-access",
+    "guided-capture",
+  );
+  await expect(
+    page.getByRole("button", { name: "Adopt this placement" }),
+  ).toBeDisabled();
+
+  await page.getByRole("button", { name: "Close guide" }).click();
+  await expect(workbench).toHaveAttribute("data-mutation-access", "enabled");
+  await expect(
+    page.getByRole("button", { name: "Adopt this placement" }),
+  ).toBeEnabled();
+  await expect(workbench).toHaveAttribute(
+    "data-worldstate-revision",
+    initialRevision as string,
+  );
+  expect((await persistedLedgerSummary(page)).acceptedCount).toBe(
+    before.acceptedCount,
+  );
+});
+
+test("selection drift before capture is retained as request truth and cannot complete the Budget chapter", async ({
+  page,
+}) => {
+  await completeOpening(page, "Interactive");
+  const workbench = workbenchRoot(page);
+  const initialRevision = await workbench.getAttribute(
+    "data-worldstate-revision",
+  );
+  const before = await persistedLedgerSummary(page);
+  await startSourcePlacementGuide(page, "Interactive");
+
+  await workbench
+    .locator(`[data-worldstate-id='${HOME_MOVE_IDS.goal}']`)
+    .first()
+    .click();
+  await expect(workbench).toHaveAttribute(
+    "data-selected-object-id",
+    HOME_MOVE_IDS.goal,
+  );
+  await page.getByRole("button", { name: "Capture & place" }).click();
+  await expect(page.getByText("Suggested · canonical unchanged")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Waiting for placement" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText(/durable request was captured outside the required Budget context/i),
+  ).toBeVisible();
+  await expect(
+    page.locator("[data-evidence-anchor='placement-request'] small"),
+  ).toContainText(`selected context ${HOME_MOVE_IDS.goal}`);
+  await expect(workbench).toHaveAttribute(
+    "data-worldstate-revision",
+    initialRevision as string,
+  );
+  const after = await persistedLedgerSummary(page);
+  expect(after.acceptedCount).toBe(before.acceptedCount);
+  expect(after.briefCount).toBe(before.briefCount);
+  expect(after.runCount).toBe(before.runCount);
+  expect(after.closureCount).toBe(before.closureCount);
+});
+
+test("watch-only source guidance never captures and reload reuses the same durable receipt", async ({
+  page,
+}) => {
+  let placementCalls = 0;
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/api/placement"
+    ) {
+      placementCalls += 1;
+    }
+  });
+
+  await completeOpening(page, "Watch only");
+  const before = await persistedLedgerSummary(page);
+  await startSourcePlacementGuide(page, "Watch only");
+  expect(placementCalls).toBe(0);
+  await expect(
+    page.getByRole("button", { name: "Capture & place" }),
+  ).toBeEnabled();
+
+  await page.getByRole("button", { name: "Capture & place" }).click();
+  await expect(
+    page.getByRole("button", { name: "Review placement" }),
+  ).toBeEnabled();
+  expect(placementCalls).toBe(1);
+  const saved = await persistedLedgerSummary(page);
+  expect(saved.humanSourceIds).toHaveLength(before.humanSourceIds.length + 1);
+  expect(saved.placementAttemptIds).toHaveLength(
+    before.placementAttemptIds.length + 1,
+  );
+  expect(saved.placementExchangeIds).toHaveLength(
+    before.placementExchangeIds.length + 1,
+  );
+  expect(saved.pendingDeltaIds).toHaveLength(
+    before.pendingDeltaIds.length + 1,
+  );
+  expect(saved.acceptedCount).toBe(before.acceptedCount);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Watch only", exact: true }).click();
+  const continueButton = page.getByRole("button", {
+    name: "Continue",
+    exact: true,
+  });
+  await expect(continueButton).toBeEnabled();
+  await continueButton.click();
+  await expect(continueButton).toBeEnabled();
+  await continueButton.click();
+  await expect(continueButton).toBeEnabled();
+  await continueButton.click();
+  await page.getByRole("button", { name: "Finish opening" }).click();
+  await startSourcePlacementGuide(page, "Watch only");
+
+  await expect(
+    page.getByRole("button", { name: "Review placement" }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Capture & place" }),
+  ).toHaveCount(0);
+  expect(placementCalls).toBe(1);
+  expect(await persistedLedgerSummary(page)).toEqual(saved);
+
+  await page.getByRole("button", { name: "Review placement" }).click();
+  await page
+    .getByRole("button", { name: "Finish source chapter" })
+    .click();
+  expect(await persistedLedgerSummary(page)).toEqual(saved);
+});
+
+test("a failed placement preserves one source and exact retry reaches review without adoption", async ({
+  page,
+}) => {
+  let placementCalls = 0;
+  await page.route("**/api/placement", async (route) => {
+    placementCalls += 1;
+    if (placementCalls === 1) {
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  });
+
+  await completeOpening(page, "Watch only");
+  const workbench = workbenchRoot(page);
+  const initialRevision = await workbench.getAttribute(
+    "data-worldstate-revision",
+  );
+  const before = await persistedLedgerSummary(page);
+  await startSourcePlacementGuide(page, "Watch only");
+
+  await page.getByRole("button", { name: "Capture & place" }).click();
+  await expect(page.getByText("Placement failed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Failed · source retained", { exact: true })).toBeVisible();
+  const afterFailure = await persistedLedgerSummary(page);
+  expect(placementCalls).toBe(1);
+  expect(afterFailure.humanSourceIds).toHaveLength(
+    before.humanSourceIds.length + 1,
+  );
+  expect(afterFailure.placementAttemptIds).toHaveLength(
+    before.placementAttemptIds.length + 1,
+  );
+  expect(afterFailure.pendingDeltaIds).toHaveLength(
+    before.pendingDeltaIds.length,
+  );
+  await expect(
+    page.getByRole("button", { name: "Retry from preserved source" }),
+  ).toBeEnabled();
+
+  await page
+    .getByRole("button", { name: "Retry from preserved source" })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Review placement" }),
+  ).toBeEnabled();
+  expect(placementCalls).toBe(2);
+  const afterRetry = await persistedLedgerSummary(page);
+  expect(afterRetry.humanSourceIds).toEqual(afterFailure.humanSourceIds);
+  expect(afterRetry.placementAttemptIds).toHaveLength(
+    before.placementAttemptIds.length + 2,
+  );
+  expect(afterRetry.placementExchangeIds).toHaveLength(
+    before.placementExchangeIds.length + 1,
+  );
+  expect(afterRetry.pendingDeltaIds).toHaveLength(
+    before.pendingDeltaIds.length + 1,
+  );
+  expect(afterRetry.acceptedCount).toBe(before.acceptedCount);
+  expect(afterRetry.briefCount).toBe(before.briefCount);
+  expect(afterRetry.runCount).toBe(before.runCount);
+  expect(afterRetry.closureCount).toBe(before.closureCount);
+  await expect(workbench).toHaveAttribute(
+    "data-worldstate-revision",
+    initialRevision as string,
+  );
 });

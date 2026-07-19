@@ -72,6 +72,7 @@ import {
 import { domainBriefToCodexRunRequest } from "@/integration/domain-brief-to-codex";
 
 import { buildWorkbenchViewModel } from "./view-model";
+import type { WorldstatePlacementObservation } from "./placement-observation";
 import type { WorldstatePresentationState } from "./presentation";
 import type { WorkSurface } from "./types";
 import { WorkPanel, WorldstateWorkbench } from "./worldstate-workbench";
@@ -370,6 +371,70 @@ describe("WorldstateWorkbench", () => {
     expect(firstListener).toHaveBeenCalledTimes(1);
   });
 
+  it("reports exact placement truth without re-emitting for a new listener identity", async () => {
+    const user = userEvent.setup();
+    const { session } = sessionHarness();
+    await session.initialize();
+    const firstListener = vi.fn<
+      (observation: WorldstatePlacementObservation) => void
+    >();
+    const latestListener = vi.fn<
+      (observation: WorldstatePlacementObservation) => void
+    >();
+    const { rerender } = render(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        onPlacementObservationChange={firstListener}
+        session={session}
+      />,
+    );
+
+    await waitFor(() => expect(firstListener).toHaveBeenCalledTimes(1));
+    expect(firstListener).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        state: "idle",
+        headRevisionId: expect.any(String),
+      }),
+    );
+
+    rerender(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        onPlacementObservationChange={latestListener}
+        session={session}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(latestListener).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Capture & place" }));
+    await waitFor(() => {
+      expect(latestListener).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          state: "reviewable",
+          operationState: "idle",
+          persistenceState: "saved",
+          sourceId: expect.any(String),
+          requestId: expect.any(String),
+          requestSelectedNodeId: HOME_MOVE_IDS.budget,
+          attemptId: expect.any(String),
+          exchangeId: expect.any(String),
+          receiptId: expect.any(String),
+          deltaId: expect.any(String),
+          candidateId: expect.any(String),
+          locationTargetNodeId: HOME_MOVE_IDS.budget,
+          baseRevisionId: expect.any(String),
+          headRevisionId: expect.any(String),
+          managerMode: "fixture",
+          canAccept: true,
+        }),
+      );
+    });
+    expect(firstListener).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps durable and authority actions closed in presentation-only mode", async () => {
     const { session } = sessionHarness();
     await session.initialize();
@@ -420,6 +485,113 @@ describe("WorldstateWorkbench", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("allows only user capture and exact preserved-source retry in guided-capture mode", async () => {
+    const user = userEvent.setup();
+    let placementCallCount = 0;
+    const retryingGateway = vi.fn(
+      async (request: PlacementRequest): Promise<PlacementResponse> => {
+        placementCallCount += 1;
+        if (placementCallCount === 1) {
+          return PlacementErrorResponseSchema.parse({
+            ok: false,
+            manager: {
+              requestedMode: "live",
+              effectiveMode: "live",
+              status: "failed",
+              provider: "openai",
+              model: "gpt-test",
+              responseId: "response-guided-capture-failure",
+            },
+            sourcePreserved: true,
+            error: {
+              code: "provider_request_failed",
+              message: "The first placement attempt did not complete.",
+              retryable: true,
+              issues: [],
+            },
+          });
+        }
+        return fixtureGateway(request);
+      },
+    );
+    const { session } = sessionHarness(
+      createMemoryWorldstateLedgerStore(),
+      retryingGateway,
+      "guided-capture",
+    );
+    await session.initialize();
+    const captureAndPlace = vi.spyOn(session, "captureAndPlace");
+    const retryPlacement = vi.spyOn(session, "retryPlacement");
+    const acceptActivePlacement = vi.spyOn(session, "acceptActivePlacement");
+    const resetSandbox = vi.spyOn(session, "resetSandbox");
+    const initialRevision = session.getSnapshot().state?.canonical.head.id;
+    const { container } = render(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        mutationAccess="guided-capture"
+        session={session}
+      />,
+    );
+
+    const captureButton = screen.getByRole("button", {
+      name: "Capture & place",
+    });
+    const resetButton = screen.getByRole("button", { name: "Reset sandbox" });
+    expect(captureButton).toBeEnabled();
+    expect(resetButton).toBeDisabled();
+    expect(
+      screen.getByText("Guided source placement", { exact: true }),
+    ).toBeVisible();
+
+    await user.click(captureButton);
+    const retryButton = await screen.findByRole("button", {
+      name: "Retry from preserved source",
+    });
+    expect(retryButton).toBeEnabled();
+    expect(captureAndPlace).toHaveBeenCalledOnce();
+
+    await user.click(retryButton);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Adopt this placement" }),
+      ).toBeDisabled(),
+    );
+
+    const snapshot = session.getSnapshot();
+    const humanSourceIds =
+      snapshot.ledger?.events.flatMap((event) =>
+        event.type === "source.captured" &&
+        event.payload.source.kind === "text"
+          ? [event.payload.source.id]
+          : [],
+      ) ?? [];
+    const pendingDeltas = Object.values(
+      snapshot.state?.operational.deltas ?? {},
+    ).filter((projection) => projection.disposition === "pending");
+
+    expect(retryingGateway).toHaveBeenCalledTimes(2);
+    expect(retryPlacement).toHaveBeenCalledOnce();
+    expect(new Set(humanSourceIds).size).toBe(1);
+    expect(pendingDeltas).toHaveLength(1);
+    expect(snapshot.state?.canonical.head.id).toBe(initialRevision);
+
+    const adoptButton = screen.getByRole("button", {
+      name: "Adopt this placement",
+    });
+    expect(adoptButton).toHaveAccessibleDescription(
+      /Semantic commit, reset, agent work, validation, reconciliation, integration, and promotion remain locked/i,
+    );
+    adoptButton.removeAttribute("disabled");
+    fireEvent.click(adoptButton);
+    resetButton.removeAttribute("disabled");
+    fireEvent.click(resetButton);
+
+    expect(acceptActivePlacement).not.toHaveBeenCalled();
+    expect(resetSandbox).not.toHaveBeenCalled();
+    expect(container.querySelector("[data-mutation-access='guided-capture']"))
+      .toBeInTheDocument();
+  });
+
   it("preserves ready domain posture while explaining the presentation-only action lock", async () => {
     const user = userEvent.setup();
     const { session } = sessionHarness();
@@ -452,10 +624,10 @@ describe("WorldstateWorkbench", () => {
     ).toHaveAttribute("data-gate-state", "ready");
     expect(prepareButton).toBeDisabled();
     expect(prepareButton).toHaveAccessibleDescription(
-      /Finish or skip the opening guide to restore durable, provider, and authority-increasing actions/i,
+      /Continue or skip the opening guide to reach guided source capture/i,
     );
     expect(resetButton).toHaveAccessibleDescription(
-      /Finish or skip the opening guide to restore durable, provider, and authority-increasing actions/i,
+      /Continue or skip the opening guide to reach guided source capture/i,
     );
 
     prepareButton.removeAttribute("disabled");
@@ -513,7 +685,7 @@ describe("WorldstateWorkbench", () => {
     ).toHaveAttribute("data-gate-state", "ready");
     expect(authorizeButton).toBeDisabled();
     expect(authorizeButton).toHaveAccessibleDescription(
-      /Finish or skip the opening guide to restore durable, provider, and authority-increasing actions/i,
+      /Continue or skip the opening guide to reach guided source capture/i,
     );
     authorizeButton.removeAttribute("disabled");
     fireEvent.click(authorizeButton);
@@ -1521,7 +1693,7 @@ describe("WorldstateWorkbench", () => {
     const { container } = render(<WorldstateWorkbench session={session} />);
 
     await screen.findByRole("button", { name: "Capture & place" });
-    expect(screen.getByText("01 placement record")).toBeVisible();
+    expect(screen.getByText("01 exact lineage record")).toBeVisible();
 
     const idleEvidence = container.querySelector(
       "[data-morphic-region='evidence']",
@@ -1544,7 +1716,7 @@ describe("WorldstateWorkbench", () => {
       ).toBeEnabled(),
     );
 
-    expect(screen.getByText("04 placement records")).toBeVisible();
+    expect(screen.getByText("07 exact lineage records")).toBeVisible();
     const reviewableReceipt = container.querySelector(
       "[data-morphic-region='interpretation']",
     );
@@ -1595,7 +1767,7 @@ describe("WorldstateWorkbench", () => {
       await screen.findByRole("button", { name: "Capture & place" }),
     );
 
-    expect(await screen.findByText("03 placement records")).toBeVisible();
+    expect(await screen.findByText("05 exact lineage records")).toBeVisible();
     expect(screen.getByText(/^source-placement-exchange:/)).toBeVisible();
     expect(
       screen.queryByText("No persisted manager exchange yet"),

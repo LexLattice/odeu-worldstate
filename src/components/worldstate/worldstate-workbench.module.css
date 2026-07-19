@@ -762,6 +762,7 @@
 
 .captureComposer textarea::placeholder { color: var(--faint); }
 
+.captureContract,
 .captureGate {
   grid-column: 1 / -1;
   margin: 0;
@@ -1930,7 +1931,25 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
   .reconciliationBindings { grid-template-columns: minmax(0, 1fr); }
   .workerEvents li { flex-wrap: wrap; }
   .workerEvents time { width: 100%; padding-left: 0.9rem; }
-  .placementPath span:first-child { display: none; }
+  .placementPath {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    overflow: visible;
+    white-space: normal;
+  }
+  .placementPath span:first-child { display: inline-flex; }
+  .placementPath span,
+  .placementPath strong {
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+  }
+  .evidenceList small {
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
   .receiptFacts div { grid-template-columns: minmax(0, 1fr); gap: 0.2rem; }
   .commitButton { min-height: 2.9rem; }
   .timelineView { padding-inline: 0.55rem; }
