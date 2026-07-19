@@ -84,10 +84,15 @@ const SECRET_FREE_TOOL_ENVIRONMENT = Object.freeze({
   LANG: "C.UTF-8",
   LC_ALL: "C.UTF-8",
   PATH: "/usr/bin:/bin",
+  // Candidate repositories are local-only verifier inputs. Never permit an
+  // object lookup to select a transport or lazily fetch a missing object.
+  GIT_ALLOW_PROTOCOL: "",
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_NO_LAZY_FETCH: "1",
   GIT_NO_REPLACE_OBJECTS: "1",
   GIT_OPTIONAL_LOCKS: "0",
+  GIT_PROTOCOL_FROM_USER: "0",
   GIT_TERMINAL_PROMPT: "0",
 });
 
@@ -438,7 +443,19 @@ async function git(
   try {
     result = await spawnBounded({
       command: "/usr/bin/git",
-      args: ["-C", repositoryPath, ...args],
+      args: [
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "protocol.allow=never",
+        "-C",
+        repositoryPath,
+        ...args,
+      ],
       environment: SECRET_FREE_TOOL_ENVIRONMENT,
       timeoutMs: GIT_TIMEOUT_MS,
       outputLimit,
@@ -462,8 +479,106 @@ async function git(
   return result.stdout;
 }
 
+const REPOSITORY_INCLUDE_CONFIG = /^(?:include\.path|includeif\..+\.path)$/i;
+const PARTIAL_CLONE_HELPER_CONFIG =
+  /^(?:extensions\.partialclone|remote\..+\.(?:promisor|partialclonefilter|uploadpack))$/i;
+
+async function assertSafeRepositoryGitConfiguration(
+  repositoryPath: string,
+): Promise<void> {
+  // Inspect the raw local/worktree files without following include paths. Only
+  // names are needed, and these probes do not resolve candidate objects or run
+  // an upload-pack helper. They must precede every object/ref observation.
+  const configuredNames = (
+    await Promise.all(
+      (["local", "worktree"] as const).map((scope) =>
+        git(
+          repositoryPath,
+          [
+            "config",
+            "--no-includes",
+            `--${scope}`,
+            "--null",
+            "--name-only",
+            "--list",
+          ],
+          `checking ${scope} repository Git configuration`,
+          256 * 1_024,
+        ),
+      ),
+    )
+  ).flatMap((raw) =>
+    raw
+      .toString("utf8")
+      .split("\0")
+      .map((name) => name.trim())
+      .filter(Boolean),
+  );
+  if (
+    configuredNames.some(
+      (name) =>
+        REPOSITORY_INCLUDE_CONFIG.test(name) ||
+        PARTIAL_CLONE_HELPER_CONFIG.test(name),
+    )
+  ) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The live-evidence repository contains unsafe includes or partial-clone helpers.",
+    );
+  }
+}
+
 function text(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+}
+
+async function observeDirectCommitRef(
+  repositoryPath: string,
+  ref: string,
+): Promise<string> {
+  const raw = await git(
+    repositoryPath,
+    [
+      "for-each-ref",
+      "--format=%(refname)%00%(objectname)%00%(objecttype)%00%(symref)%00",
+      ref,
+    ],
+    "observing the exact signed candidate ref",
+    16 * 1_024,
+  );
+  const exactRecords = raw
+    .toString("utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => line.split("\0"))
+    .filter(([refName]) => refName === ref);
+  if (exactRecords.length !== 1) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The signed candidate ref is absent or is not one exact Git ref.",
+    );
+  }
+  const [refName, objectId, objectType, symbolicTarget, terminator] =
+    exactRecords[0] ?? [];
+  if (
+    refName !== ref ||
+    terminator !== "" ||
+    !objectId ||
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(objectId)
+  ) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The signed candidate ref returned malformed raw ref data.",
+    );
+  }
+  if (symbolicTarget) {
+    throw new LiveEvidenceVerificationFailedError(
+      "The signed candidate ref must be a direct Git ref, not a symbolic ref.",
+    );
+  }
+  if (objectType !== "commit") {
+    throw new LiveEvidenceVerificationFailedError(
+      "The signed candidate ref must point directly to a commit object without tag peeling.",
+    );
+  }
+  return objectId;
 }
 
 function zeroObjectId(value: string): boolean {
@@ -555,11 +670,7 @@ async function verifySealedCandidate(
   const [observedFormat, observedRefCommit, parentLine, observedBaseTree, observedTree] =
     await Promise.all([
       git(repositoryPath, ["rev-parse", "--show-object-format"], "reading the object format"),
-      git(
-        repositoryPath,
-        ["rev-parse", "--verify", `${metadata.candidateRef}^{commit}`],
-        "resolving the signed candidate ref",
-      ),
+      observeDirectCommitRef(repositoryPath, metadata.candidateRef),
       git(
         repositoryPath,
         ["rev-list", "--parents", "-n", "1", candidateCommit],
@@ -580,7 +691,7 @@ async function verifySealedCandidate(
   const parents = text(parentLine).split(/\s+/);
   const issues: string[] = [];
   if (text(observedFormat) !== objectFormat) issues.push("Git object format mismatch.");
-  if (text(observedRefCommit) !== candidateCommit) issues.push("Candidate ref mismatch.");
+  if (observedRefCommit !== candidateCommit) issues.push("Candidate ref mismatch.");
   if (parents.length !== 2 || parents[0] !== candidateCommit || parents[1] !== baseCommit) {
     issues.push("Candidate commit must have exactly the signed base commit as its parent.");
   }
@@ -1175,6 +1286,7 @@ export async function verifyLiveEvidence(
     configured.repositoryPath,
     "The registered live-evidence repository",
   );
+  await assertSafeRepositoryGitConfiguration(repositoryPath);
   const toolchainPath = configured.toolchainPath
     ? await trustedDirectory(
         configured.toolchainPath,

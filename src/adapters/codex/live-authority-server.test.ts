@@ -374,6 +374,9 @@ describe("live browser-to-server authority handoff", () => {
         `  printf 'GIT_CONFIG_NOSYSTEM=%s\\n' "\${GIT_CONFIG_NOSYSTEM-<unset>}";`,
         `  printf 'GIT_CONFIG_GLOBAL=%s\\n' "\${GIT_CONFIG_GLOBAL-<unset>}";`,
         `  printf 'GIT_OPTIONAL_LOCKS=%s\\n' "\${GIT_OPTIONAL_LOCKS-<unset>}";`,
+        `  printf 'GIT_ALLOW_PROTOCOL=%s\\n' "\${GIT_ALLOW_PROTOCOL-<unset>}";`,
+        `  printf 'GIT_PROTOCOL_FROM_USER=%s\\n' "\${GIT_PROTOCOL_FROM_USER-<unset>}";`,
+        `  printf 'GIT_NO_LAZY_FETCH=%s\\n' "\${GIT_NO_LAZY_FETCH-<unset>}";`,
         `  printf 'ARGS=%s\\n' "$*"; } >> ${shellQuote(probeEnvironmentLog)}`,
         `PATH=${shellQuote(originalPath)} exec git "$@"`,
         "",
@@ -412,12 +415,266 @@ describe("live browser-to-server authority handoff", () => {
     expect(captured).not.toContain("process-live-authority-secret");
     expect(captured).not.toContain("process-artifact-signing-secret");
     expect(captured).toContain("GIT_CONFIG_NOSYSTEM=1");
-    expect(captured).toContain("GIT_CONFIG_GLOBAL=/dev/null");
+    const gitNullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
+    expect(captured).toContain(`GIT_CONFIG_GLOBAL=${gitNullDevice}`);
     expect(captured).toContain("GIT_OPTIONAL_LOCKS=0");
+    expect(captured).toContain("GIT_ALLOW_PROTOCOL=");
+    expect(captured).toContain("GIT_PROTOCOL_FROM_USER=0");
+    expect(captured).toContain("GIT_NO_LAZY_FETCH=1");
     expect(captured).toContain("-c core.fsmonitor=false");
+    expect(captured).toContain(`-c core.hooksPath=${gitNullDevice}`);
+    const [firstGitProbe] = captured
+      .split("\n")
+      .filter((line) => line.startsWith("ARGS="));
+    expect(firstGitProbe).toContain(
+      "config --null --name-only --no-includes --list",
+    );
     await expect(access(fsmonitorMarker)).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it.each([
+    "include.path",
+    "includeIf.gitdir:/definitely-not-the-live-workspace/.path",
+  ] as const)(
+    "rejects a repository-controlled %s directive before other Git probes",
+    async (configKey) => {
+      const fixture = await preparedFixture();
+      await git(
+        fixture.workspace,
+        "config",
+        "--local",
+        configKey,
+        join(fixture.root, "missing-included-config"),
+      );
+
+      const options = { env: fixture.env };
+      await expect(getAgentRuntimeCapability(options)).resolves.toMatchObject({
+        effectiveMode: "live",
+        status: "unavailable",
+      });
+      await expect(
+        authorizeAndPublishLiveRun(requestInput(fixture), options),
+      ).rejects.toMatchObject({ code: "workspace_not_ready" });
+    },
+  );
+
+  it.each(["clean", "smudge", "process"] as const)(
+    "rejects a repository-controlled %s filter before Git can execute it",
+    async (filterKind) => {
+      const fixture = await preparedFixture();
+      const marker = join(fixture.root, `${filterKind}-filter-invoked`);
+      const filter = join(fixture.root, `${filterKind}-filter.sh`);
+      await writeFile(
+        filter,
+        [
+          "#!/bin/sh",
+          `printf 'invoked\\n' > ${shellQuote(marker)}`,
+          "cat",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await chmod(filter, 0o700);
+      if (filterKind === "clean") {
+        await writeFile(
+          join(fixture.workspace, ".gitattributes"),
+          "README.md filter=untrusted\n",
+          "utf8",
+        );
+        await git(fixture.workspace, "add", ".gitattributes");
+        await git(
+          fixture.workspace,
+          "commit",
+          "-m",
+          "add untrusted filter attribute",
+        );
+      }
+      await git(
+        fixture.workspace,
+        "config",
+        `filter.untrusted.${filterKind}`,
+        filter,
+      );
+
+      const options = { env: fixture.env };
+      await expect(getAgentRuntimeCapability(options)).resolves.toMatchObject({
+        effectiveMode: "live",
+        status: "unavailable",
+      });
+      await expect(
+        authorizeAndPublishLiveRun(requestInput(fixture), options),
+      ).rejects.toMatchObject({ code: "workspace_not_ready" });
+      await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("rejects repository-controlled partial-clone helpers before resolving objects", async () => {
+    const fixture = await preparedFixture();
+    const marker = join(fixture.root, "partial-clone-helper-invoked");
+    const uploadPack = join(fixture.root, "untrusted-upload-pack.sh");
+    await writeFile(
+      uploadPack,
+      [
+        "#!/bin/sh",
+        `printf 'invoked\\n' > ${shellQuote(marker)}`,
+        "exit 1",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(uploadPack, 0o700);
+    await git(fixture.workspace, "config", "remote.untrusted.promisor", "true");
+    await git(
+      fixture.workspace,
+      "config",
+      "remote.untrusted.partialclonefilter",
+      "blob:none",
+    );
+    await git(
+      fixture.workspace,
+      "config",
+      "remote.untrusted.uploadpack",
+      uploadPack,
+    );
+    await git(
+      fixture.workspace,
+      "config",
+      "remote.untrusted.url",
+      fixture.workspace,
+    );
+
+    const options = { env: fixture.env };
+    await expect(getAgentRuntimeCapability(options)).resolves.toMatchObject({
+      effectiveMode: "live",
+      status: "unavailable",
+    });
+    await expect(
+      authorizeAndPublishLiveRun(requestInput(fixture), options),
+    ).rejects.toMatchObject({ code: "workspace_not_ready" });
+    await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects an initialized submodule before status can execute its filter", async () => {
+    const fixture = await preparedFixture();
+    const submoduleSource = join(fixture.root, "submodule-source");
+    await mkdir(submoduleSource);
+    await git(submoduleSource, "init");
+    await git(submoduleSource, "config", "user.name", "ODEU Test");
+    await git(
+      submoduleSource,
+      "config",
+      "user.email",
+      "odeu@example.invalid",
+    );
+    await writeFile(
+      join(submoduleSource, ".gitattributes"),
+      "tracked.txt filter=untrusted\n",
+      "utf8",
+    );
+    await writeFile(join(submoduleSource, "tracked.txt"), "seed\n", "utf8");
+    await git(submoduleSource, "add", ".gitattributes", "tracked.txt");
+    await git(submoduleSource, "commit", "-m", "submodule seed");
+
+    const submodulePath = "vendor/submodule";
+    await git(
+      fixture.workspace,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      submoduleSource,
+      submodulePath,
+    );
+    await git(fixture.workspace, "commit", "-m", "add initialized submodule");
+
+    const marker = join(fixture.root, "submodule-filter-invoked");
+    const filter = join(fixture.root, "submodule-filter.sh");
+    await writeFile(
+      filter,
+      [
+        "#!/bin/sh",
+        `printf 'invoked\\n' > ${shellQuote(marker)}`,
+        "cat",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(filter, 0o700);
+    const initializedSubmodule = join(fixture.workspace, submodulePath);
+    await git(
+      initializedSubmodule,
+      "config",
+      "filter.untrusted.clean",
+      filter,
+    );
+    await writeFile(
+      join(initializedSubmodule, "tracked.txt"),
+      "dirty submodule content\n",
+      "utf8",
+    );
+
+    const options = { env: fixture.env };
+    await expect(getAgentRuntimeCapability(options)).resolves.toMatchObject({
+      effectiveMode: "live",
+      status: "unavailable",
+    });
+    await expect(
+      authorizeAndPublishLiveRun(requestInput(fixture), options),
+    ).rejects.toMatchObject({ code: "workspace_not_ready" });
+    await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("requires the promotion target to be a direct commit ref", async () => {
+    const annotatedFixture = await preparedFixture();
+    await git(
+      annotatedFixture.workspace,
+      "tag",
+      "-a",
+      "promotion-annotated",
+      "-m",
+      "annotated promotion target",
+    );
+    const annotatedOptions = {
+      env: {
+        ...annotatedFixture.env,
+        ODEU_CODEX_PROMOTION_TARGET_REF: "refs/tags/promotion-annotated",
+      },
+    };
+    await expect(
+      getAgentRuntimeCapability(annotatedOptions),
+    ).resolves.toMatchObject({ effectiveMode: "live", status: "unavailable" });
+    await expect(
+      authorizeAndPublishLiveRun(
+        requestInput(annotatedFixture),
+        annotatedOptions,
+      ),
+    ).rejects.toMatchObject({ code: "workspace_not_ready" });
+
+    const symbolicFixture = await preparedFixture();
+    const directTarget = symbolicFixture.env.ODEU_CODEX_PROMOTION_TARGET_REF!;
+    await git(
+      symbolicFixture.workspace,
+      "symbolic-ref",
+      "refs/heads/promotion-symbolic",
+      directTarget,
+    );
+    const symbolicOptions = {
+      env: {
+        ...symbolicFixture.env,
+        ODEU_CODEX_PROMOTION_TARGET_REF: "refs/heads/promotion-symbolic",
+      },
+    };
+    await expect(
+      getAgentRuntimeCapability(symbolicOptions),
+    ).resolves.toMatchObject({ effectiveMode: "live", status: "unavailable" });
+    await expect(
+      authorizeAndPublishLiveRun(
+        requestInput(symbolicFixture),
+        symbolicOptions,
+      ),
+    ).rejects.toMatchObject({ code: "workspace_not_ready" });
   });
 
   it("reports only a safe capability and atomically publishes an exact queued run intent", async () => {
