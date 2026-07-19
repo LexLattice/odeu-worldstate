@@ -1,4 +1,11 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -65,6 +72,7 @@ import {
 import { domainBriefToCodexRunRequest } from "@/integration/domain-brief-to-codex";
 
 import { buildWorkbenchViewModel } from "./view-model";
+import type { WorldstatePresentationState } from "./presentation";
 import type { WorkSurface } from "./types";
 import { WorkPanel, WorldstateWorkbench } from "./worldstate-workbench";
 
@@ -324,6 +332,394 @@ function replayValidationSnapshot(
 }
 
 describe("WorldstateWorkbench", () => {
+  it("reports presentation changes without re-emitting for a new listener identity", async () => {
+    const user = userEvent.setup();
+    const { session } = sessionHarness();
+    await session.initialize();
+    const firstListener = vi.fn<(state: WorldstatePresentationState) => void>();
+    const latestListener = vi.fn<(state: WorldstatePresentationState) => void>();
+    const { rerender } = render(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        onPresentationStateChange={firstListener}
+        session={session}
+      />,
+    );
+
+    await waitFor(() => expect(firstListener).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        onPresentationStateChange={latestListener}
+        session={session}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(latestListener).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("tab", { name: /Focus:/i }));
+    await waitFor(() => {
+      expect(latestListener).toHaveBeenCalledTimes(1);
+      expect(latestListener).toHaveBeenLastCalledWith(
+        expect.objectContaining({ view: "focus" }),
+      );
+    });
+    expect(firstListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps durable and authority actions closed in presentation-only mode", async () => {
+    const { session } = sessionHarness();
+    await session.initialize();
+    const captureAndPlace = vi.spyOn(session, "captureAndPlace");
+    const resetSandbox = vi.spyOn(session, "resetSandbox");
+    const { container, rerender } = render(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        mutationAccess="presentation-only"
+        session={session}
+      />,
+    );
+
+    const captureButton = await screen.findByRole("button", {
+      name: "Capture & place",
+    });
+    const resetButton = screen.getByRole("button", { name: "Reset sandbox" });
+    const sourceInput = screen.getByRole("textbox", { name: "Source text" });
+    const root = container.querySelector(
+      "[data-morphic-root='worldstate-workbench']",
+    );
+    const captureForm = captureButton.closest("form");
+
+    expect(root).toHaveAttribute("data-mutation-access", "presentation-only");
+    expect(captureButton).toBeDisabled();
+    expect(resetButton).toBeDisabled();
+    expect(sourceInput).toBeEnabled();
+    expect(sourceInput).toHaveAccessibleDescription(
+      /Finish or skip the opening guide before saving this source/i,
+    );
+    expect(captureForm).not.toBeNull();
+    fireEvent.submit(captureForm as HTMLFormElement);
+    expect(captureAndPlace).not.toHaveBeenCalled();
+    expect(resetSandbox).not.toHaveBeenCalled();
+
+    rerender(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        mutationAccess="enabled"
+        session={session}
+      />,
+    );
+    expect(root).toHaveAttribute("data-mutation-access", "enabled");
+    expect(captureButton).toBeEnabled();
+    expect(resetButton).toBeEnabled();
+    expect(
+      screen.queryByText(/Finish or skip the opening guide before saving/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("preserves ready domain posture while explaining the presentation-only action lock", async () => {
+    const user = userEvent.setup();
+    const { session } = sessionHarness();
+    await session.initialize();
+    await session.captureAndPlace(SOURCE, HOME_MOVE_IDS.budget);
+    await session.acceptActivePlacement();
+    const prepareAgentBrief = vi.spyOn(session, "prepareActiveAgentBrief");
+    const resetSandbox = vi.spyOn(session, "resetSandbox");
+    const { container, rerender } = render(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        mutationAccess="presentation-only"
+        session={session}
+      />,
+    );
+
+    const prepareButton = await screen.findByRole("button", {
+      name: "Prepare agent brief",
+    });
+    const resetButton = screen.getByRole("button", { name: "Reset sandbox" });
+    const accessNotice = screen.getByText("Presentation-only opening");
+    const eventCountBeforeForcedActions =
+      session.getSnapshot().ledger?.events.length;
+    const revisionBeforeForcedActions =
+      session.getSnapshot().state?.canonical.head.id;
+
+    expect(accessNotice).toBeVisible();
+    expect(
+      container.querySelector("[data-action-cluster='brief-preparation']"),
+    ).toHaveAttribute("data-gate-state", "ready");
+    expect(prepareButton).toBeDisabled();
+    expect(prepareButton).toHaveAccessibleDescription(
+      /Finish or skip the opening guide to restore durable, provider, and authority-increasing actions/i,
+    );
+    expect(resetButton).toHaveAccessibleDescription(
+      /Finish or skip the opening guide to restore durable, provider, and authority-increasing actions/i,
+    );
+
+    prepareButton.removeAttribute("disabled");
+    fireEvent.click(prepareButton);
+    resetButton.removeAttribute("disabled");
+    fireEvent.click(resetButton);
+
+    expect(prepareAgentBrief).not.toHaveBeenCalled();
+    expect(resetSandbox).not.toHaveBeenCalled();
+    expect(session.getSnapshot().ledger?.events.length).toBe(
+      eventCountBeforeForcedActions,
+    );
+    expect(session.getSnapshot().state?.canonical.head.id).toBe(
+      revisionBeforeForcedActions,
+    );
+
+    prepareAgentBrief.mockRestore();
+    rerender(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        mutationAccess="enabled"
+        session={session}
+      />,
+    );
+    const enabledPrepareButton = screen.getByRole("button", {
+      name: "Prepare agent brief",
+    });
+    expect(enabledPrepareButton).toBeEnabled();
+    await user.click(enabledPrepareButton);
+    expect(session.getSnapshot().error).toBeNull();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Authorize fixture replay" }),
+      ).toBeEnabled();
+    });
+    const authorizeRun = vi.spyOn(
+      session,
+      "authorizeAndDispatchActiveBrief",
+    );
+    rerender(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        mutationAccess="presentation-only"
+        session={session}
+      />,
+    );
+    const authorizeButton = screen.getByRole("button", {
+      name: "Authorize fixture replay",
+    });
+    const eventCountBeforeForcedAuthority =
+      session.getSnapshot().ledger?.events.length;
+
+    expect(
+      container.querySelector("[data-action-cluster='agent-delegation']"),
+    ).toHaveAttribute("data-gate-state", "ready");
+    expect(authorizeButton).toBeDisabled();
+    expect(authorizeButton).toHaveAccessibleDescription(
+      /Finish or skip the opening guide to restore durable, provider, and authority-increasing actions/i,
+    );
+    authorizeButton.removeAttribute("disabled");
+    fireEvent.click(authorizeButton);
+    expect(authorizeRun).not.toHaveBeenCalled();
+    expect(session.getSnapshot().ledger?.events.length).toBe(
+      eventCountBeforeForcedAuthority,
+    );
+  });
+
+  it("reports the complete local action lifetime before session busy state begins", async () => {
+    const user = userEvent.setup();
+    const { session } = sessionHarness();
+    await session.initialize();
+    await session.captureAndPlace(SOURCE, HOME_MOVE_IDS.budget);
+    await session.acceptActivePlacement();
+    let resolvePreparation: (() => void) | undefined;
+    const pendingPreparation = new Promise<void>((resolve) => {
+      resolvePreparation = resolve;
+    });
+    vi.spyOn(session, "prepareActiveAgentBrief").mockReturnValue(
+      pendingPreparation,
+    );
+    const onOperationBusyChange = vi.fn<(busy: boolean) => void>();
+    render(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        onOperationBusyChange={onOperationBusyChange}
+        session={session}
+      />,
+    );
+
+    const prepareButton = await screen.findByRole("button", {
+      name: "Prepare agent brief",
+    });
+    await waitFor(() => {
+      expect(onOperationBusyChange).toHaveBeenLastCalledWith(false);
+    });
+    await user.click(prepareButton);
+
+    expect(session.getSnapshot().operationState).toBe("idle");
+    await waitFor(() => {
+      expect(onOperationBusyChange).toHaveBeenLastCalledWith(true);
+      expect(prepareButton).toBeDisabled();
+    });
+
+    await act(async () => {
+      resolvePreparation?.();
+      await pendingPreparation;
+    });
+    await waitFor(() => {
+      expect(onOperationBusyChange).toHaveBeenLastCalledWith(false);
+      expect(prepareButton).toBeEnabled();
+    });
+  });
+
+  it("applies each typed presentation command identity once without changing canonical state", async () => {
+    const { session } = sessionHarness();
+    const onPresentationStateChange =
+      vi.fn<(state: WorldstatePresentationState) => void>();
+    const onSelectionChange = vi.fn();
+    const onViewChange = vi.fn();
+    const { container, rerender } = render(
+      <WorldstateWorkbench
+        initialView="outline"
+        onPresentationStateChange={onPresentationStateChange}
+        onSelectionChange={onSelectionChange}
+        onViewChange={onViewChange}
+        session={session}
+      />,
+    );
+
+    const root = await waitFor(() => {
+      const rendered = container.querySelector(
+        "[data-morphic-root='worldstate-workbench'][data-worldstate-revision]",
+      );
+      expect(rendered).toBeInTheDocument();
+      return rendered;
+    });
+    const initialLedger = session.getSnapshot().ledger;
+    const initialRevision = session.getSnapshot().state?.canonical.head.id;
+
+    rerender(
+      <WorldstateWorkbench
+        initialView="outline"
+        onPresentationStateChange={onPresentationStateChange}
+        onSelectionChange={onSelectionChange}
+        onViewChange={onViewChange}
+        presentationCommand={{
+          id: "presentation-command-view",
+          type: "select_view",
+          view: "focus",
+        }}
+        session={session}
+      />,
+    );
+    await waitFor(() => {
+      expect(root).toHaveAttribute("data-view", "focus");
+      expect(onViewChange).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      rerender(
+        <WorldstateWorkbench
+          initialView="outline"
+          onPresentationStateChange={onPresentationStateChange}
+          onSelectionChange={onSelectionChange}
+          onViewChange={onViewChange}
+          presentationCommand={{
+            id: "presentation-command-view",
+            type: "select_view",
+            view: "outline",
+          }}
+          session={session}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(root).toHaveAttribute("data-view", "focus");
+    expect(onViewChange).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <WorldstateWorkbench
+        initialView="outline"
+        onPresentationStateChange={onPresentationStateChange}
+        onSelectionChange={onSelectionChange}
+        onViewChange={onViewChange}
+        presentationCommand={{
+          id: "presentation-command-object",
+          type: "select_object",
+          objectId: HOME_MOVE_IDS.goal,
+        }}
+        session={session}
+      />,
+    );
+    await waitFor(() => {
+      expect(root).toHaveAttribute(
+        "data-selected-object-id",
+        HOME_MOVE_IDS.goal,
+      );
+      expect(onSelectionChange).toHaveBeenCalledWith(HOME_MOVE_IDS.goal);
+      expect(onPresentationStateChange).toHaveBeenLastCalledWith({
+        projectId: HOME_MOVE_IDS.project,
+        projectLabel: "Plan our home move",
+        view: "focus",
+        selectedObjectId: HOME_MOVE_IDS.goal,
+        selectedObjectLabel: "Complete the move for less than €4,000",
+      });
+    });
+
+    expect(session.getSnapshot().ledger?.events).toHaveLength(
+      initialLedger?.events.length ?? 0,
+    );
+    expect(session.getSnapshot().state?.canonical.head.id).toBe(
+      initialRevision,
+    );
+  });
+
+  it("rejects unsupported presentation targets without projecting them", async () => {
+    const { session } = sessionHarness();
+    const onSelectionChange = vi.fn();
+    const { container, rerender } = render(
+      <WorldstateWorkbench
+        onSelectionChange={onSelectionChange}
+        presentationCommand={{
+          id: "presentation-command-unsupported-object",
+          type: "select_object",
+          objectId: "node-not-in-this-project",
+        }}
+        session={session}
+      />,
+    );
+
+    const root = await waitFor(() => {
+      const rendered = container.querySelector(
+        "[data-morphic-root='worldstate-workbench'][data-worldstate-revision]",
+      );
+      expect(rendered).toHaveAttribute(
+        "data-selected-object-id",
+        HOME_MOVE_IDS.budget,
+      );
+      return rendered;
+    });
+    expect(onSelectionChange).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rerender(
+        <WorldstateWorkbench
+          onSelectionChange={onSelectionChange}
+          presentationCommand={{
+            id: "presentation-command-unsupported-object",
+            type: "select_object",
+            objectId: HOME_MOVE_IDS.goal,
+          }}
+          session={session}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(root).toHaveAttribute(
+      "data-selected-object-id",
+      HOME_MOVE_IDS.budget,
+    );
+    expect(onSelectionChange).not.toHaveBeenCalled();
+  });
+
   it("keeps the selected kernel object stable while the projection changes", async () => {
     const user = userEvent.setup();
     const { session } = sessionHarness();
@@ -1525,6 +1921,7 @@ describe("WorldstateWorkbench", () => {
       <WorkPanel
         busy={false}
         integratingResult={false}
+        mutationsDisabled={false}
         onAuthorize={vi.fn()}
         onIntegrate={vi.fn()}
         onClearOperatorAuthority={vi.fn()}

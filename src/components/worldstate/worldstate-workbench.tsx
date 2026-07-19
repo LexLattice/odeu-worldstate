@@ -3,6 +3,7 @@
 import {
   type FormEvent,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -44,6 +45,10 @@ import {
   ShieldIcon,
   SparkIcon,
 } from "./icons";
+import type {
+  WorldstatePresentationCommand,
+  WorldstatePresentationState,
+} from "./presentation";
 import { ProjectionSurface } from "./projections";
 import type {
   PlacementSurface,
@@ -528,6 +533,12 @@ export interface WorldstateWorkbenchProps {
   initialView?: ProjectionView;
   session?: WorldstateSession;
   autoInitialize?: boolean;
+  mutationAccess?: "enabled" | "presentation-only";
+  presentationCommand?: WorldstatePresentationCommand;
+  onOperationBusyChange?: (busy: boolean) => void;
+  onPresentationStateChange?: (
+    state: WorldstatePresentationState,
+  ) => void;
   onSelectionChange?: (worldstateId: string) => void;
   onSemanticCommit?: () => void;
   onViewChange?: (view: ProjectionView) => void;
@@ -539,10 +550,36 @@ export interface WorldstateWorkbenchProps {
   onArtifactPromote?: () => void;
 }
 
+function MutationAccessNotice({ id }: { readonly id: string }) {
+  return (
+    <div
+      className={styles.mutationAccessNotice}
+      data-morphic-lane="presentation-only-access"
+      data-state-surface="diagnostic-status-surface"
+      id={id}
+      role="status"
+    >
+      <ShieldIcon />
+      <span>
+        <strong>Presentation-only opening</strong>
+        <small>
+          Finish or skip the opening guide to restore durable, provider, and
+          authority-increasing actions. Current evidence and eligibility are
+          unchanged.
+        </small>
+      </span>
+    </div>
+  );
+}
+
 export function WorldstateWorkbench({
   initialView,
   session,
   autoInitialize = true,
+  mutationAccess = "enabled",
+  presentationCommand,
+  onOperationBusyChange,
+  onPresentationStateChange,
   onSelectionChange,
   onSemanticCommit,
   onAgentDispatch,
@@ -554,6 +591,7 @@ export function WorldstateWorkbench({
   onViewChange,
 }: WorldstateWorkbenchProps = {}) {
   const [ownedSession] = useState(createDefaultWorldstateSession);
+  const mutationAccessDescriptionId = useId();
   const activeSession = session ?? ownedSession;
   const snapshot = useSyncExternalStore(
     activeSession.subscribe,
@@ -568,6 +606,10 @@ export function WorldstateWorkbench({
   const initializedSession = useRef<WorldstateSession | null>(null);
   const selectionHydrated = useRef(false);
   const lastCandidateId = useRef<string | null>(null);
+  const handledPresentationCommandIds = useRef(new Set<string>());
+  const localOperationPendingRef = useRef(false);
+  const onOperationBusyChangeRef = useRef(onOperationBusyChange);
+  const onPresentationStateChangeRef = useRef(onPresentationStateChange);
   const [selectedView, setSelectedView] = useState<ProjectionView | undefined>(
     initialView,
   );
@@ -575,12 +617,14 @@ export function WorldstateWorkbench({
   const [draft, setDraft] = useState(DEFAULT_SOURCE);
   const [operatorCredentialDraft, setOperatorCredentialDraft] = useState("");
   const [operatorCredentialReady, setOperatorCredentialReady] = useState(false);
+  const [localOperationPending, setLocalOperationPending] = useState(false);
   const [resetConfirming, setResetConfirming] = useState(false);
   const [announcement, setAnnouncement] = useState(
     "Loading the durable browser ledger.",
   );
   const activeView = selectedView ?? (narrowDefault ? "focus" : "outline");
-  const busy = snapshot.operationState !== "idle";
+  const busy = localOperationPending || snapshot.operationState !== "idle";
+  const mutationsDisabled = mutationAccess !== "enabled";
   const validatingEvidence =
     snapshot.operationState === "validating_evidence" ||
     snapshot.operationState === "persisting_validation";
@@ -612,6 +656,37 @@ export function WorldstateWorkbench({
     },
     [],
   );
+
+  useEffect(() => {
+    onOperationBusyChangeRef.current = onOperationBusyChange;
+    onPresentationStateChangeRef.current = onPresentationStateChange;
+  }, [onOperationBusyChange, onPresentationStateChange]);
+
+  useEffect(() => {
+    onOperationBusyChangeRef.current?.(busy);
+  }, [busy]);
+
+  const runTrackedOperation = (
+    operation: () => Promise<void>,
+  ): Promise<void> | null => {
+    if (localOperationPendingRef.current) return null;
+    localOperationPendingRef.current = true;
+    setLocalOperationPending(true);
+
+    let pending: Promise<void>;
+    try {
+      pending = operation();
+    } catch (error) {
+      localOperationPendingRef.current = false;
+      setLocalOperationPending(false);
+      return Promise.reject(error);
+    }
+
+    return pending.finally(() => {
+      localOperationPendingRef.current = false;
+      setLocalOperationPending(false);
+    });
+  };
 
   const model = useMemo(() => {
     if (!snapshot.ledger || !snapshot.state) return null;
@@ -719,6 +794,76 @@ export function WorldstateWorkbench({
       active = false;
     };
   }, [model, selectedId, snapshot.retry]);
+
+  useEffect(() => {
+    if (
+      !model ||
+      !presentationCommand ||
+      handledPresentationCommandIds.current.has(presentationCommand.id)
+    ) {
+      return;
+    }
+
+    let active = true;
+    queueMicrotask(() => {
+      if (
+        !active ||
+        handledPresentationCommandIds.current.has(presentationCommand.id)
+      ) {
+        return;
+      }
+      handledPresentationCommandIds.current.add(presentationCommand.id);
+
+      switch (presentationCommand.type) {
+        case "select_project":
+          if (presentationCommand.projectId !== model.projectId) return;
+          setAnnouncement(`${model.project} is the active project.`);
+          return;
+        case "select_view":
+          setSelectedView(presentationCommand.view);
+          onViewChange?.(presentationCommand.view);
+          setAnnouncement(
+            `${presentationCommand.view[0].toUpperCase()}${presentationCommand.view.slice(1)} view selected.`,
+          );
+          return;
+        case "select_object": {
+          const selected = model.nodes.find(
+            (node) => node.id === presentationCommand.objectId,
+          );
+          if (!selected) return;
+          setSelectedId(selected.id);
+          onSelectionChange?.(selected.id);
+          setAnnouncement(`Selected ${selected.label}.`);
+        }
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [model, onSelectionChange, onViewChange, presentationCommand]);
+
+  const presentationState = useMemo<WorldstatePresentationState | null>(
+    () =>
+      model
+        ? {
+            projectId: model.projectId,
+            projectLabel: model.project,
+            view: activeView,
+            selectedObjectId: selectedId,
+            selectedObjectLabel:
+              model.nodes.find((node) => node.id === selectedId)?.label ??
+              selectedId,
+          }
+        : null,
+    [activeView, model, selectedId],
+  );
+
+  useEffect(() => {
+    if (presentationState) {
+      onPresentationStateChangeRef.current?.(presentationState);
+    }
+  }, [presentationState]);
 
   useEffect(() => {
     if (!model) return;
@@ -831,7 +976,7 @@ export function WorldstateWorkbench({
 
   const authorizeOperator = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (busy || !operatorCredentialDraft) return;
+    if (mutationsDisabled || busy || !operatorCredentialDraft) return;
     try {
       setMemoryOnlyOperatorCredential(operatorCredentialDraft);
       setOperatorCredentialDraft("");
@@ -839,7 +984,9 @@ export function WorldstateWorkbench({
       setAnnouncement(
         "Transient operator authority is available in page memory only. Recovering any server-held status now.",
       );
-      void activeSession.initialize().catch((error: unknown) => {
+      const operation = runTrackedOperation(() => activeSession.initialize());
+      if (!operation) return;
+      void operation.catch((error: unknown) => {
         setAnnouncement(
           error instanceof Error
             ? error.message
@@ -866,21 +1013,25 @@ export function WorldstateWorkbench({
   const submitSource = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const source = draft.trim();
-    if (!source || busy) return;
+    if (mutationsDisabled || !source || busy) return;
     setAnnouncement("Capturing the source before placement begins.");
-    void activeSession
-      .captureAndPlace(source, selectedId)
-      .catch((error: unknown) => {
-        setAnnouncement(
-          error instanceof Error ? error.message : "Placement could not start.",
-        );
-      });
+    const operation = runTrackedOperation(() =>
+      activeSession.captureAndPlace(source, selectedId),
+    );
+    if (!operation) return;
+    void operation.catch((error: unknown) => {
+      setAnnouncement(
+        error instanceof Error ? error.message : "Placement could not start.",
+      );
+    });
   };
 
   const retryPlacement = () => {
-    if (busy) return;
+    if (mutationsDisabled || busy) return;
     setAnnouncement("Retrying placement from the existing durable source.");
-    void activeSession.retryPlacement().catch((error: unknown) => {
+    const operation = runTrackedOperation(() => activeSession.retryPlacement());
+    if (!operation) return;
+    void operation.catch((error: unknown) => {
       setAnnouncement(
         error instanceof Error ? error.message : "Placement retry failed.",
       );
@@ -888,11 +1039,14 @@ export function WorldstateWorkbench({
   };
 
   const acceptPlacement = () => {
-    if (busy || !model?.placement.canAccept) return;
+    if (mutationsDisabled || busy || !model?.placement.canAccept) return;
     const before = snapshot.state?.canonical.head.id;
     setAnnouncement("Saving the human semantic commit.");
-    void activeSession
-      .acceptActivePlacement()
+    const operation = runTrackedOperation(() =>
+      activeSession.acceptActivePlacement(),
+    );
+    if (!operation) return;
+    void operation
       .then(() => {
         const after = activeSession.getSnapshot().state?.canonical.head.id;
         if (before && after && before !== after) onSemanticCommit?.();
@@ -905,11 +1059,15 @@ export function WorldstateWorkbench({
   };
 
   const prepareAgentBrief = () => {
-    if (busy || !model?.work.canPrepare) return;
+    if (mutationsDisabled || busy || !model?.work.canPrepare) return;
     setAnnouncement(
       "Preparing a durable agent brief. This does not authorize or dispatch a worker.",
     );
-    void activeSession.prepareActiveAgentBrief().catch((error: unknown) => {
+    const operation = runTrackedOperation(() =>
+      activeSession.prepareActiveAgentBrief(),
+    );
+    if (!operation) return;
+    void operation.catch((error: unknown) => {
       setAnnouncement(
         error instanceof Error
           ? error.message
@@ -920,6 +1078,7 @@ export function WorldstateWorkbench({
 
   const authorizeFixtureReplay = () => {
     if (
+      mutationsDisabled ||
       busy ||
       (!model?.work.canAuthorize && !model?.work.canRetryDispatch)
     ) {
@@ -931,12 +1090,15 @@ export function WorldstateWorkbench({
         ? "Retrying the exact durable live request after the private server confirmed execution never started. No new authority is created."
         : `Authorizing one ${model.work.runtime.effectiveMode === "live" ? "live run" : "fixture replay"} from the displayed immutable brief.`,
     );
-    void activeSession
-      [
+    const operation = runTrackedOperation(() =>
+      activeSession[
         retryingExactDispatch
           ? "retryActiveLiveDispatch"
           : "authorizeAndDispatchActiveBrief"
-      ]()
+      ](),
+    );
+    if (!operation) return;
+    void operation
       .then(() => {
         if (activeSession.getSnapshot().activeRunId) {
           onAgentDispatch?.();
@@ -950,12 +1112,15 @@ export function WorldstateWorkbench({
   };
 
   const validateReplayEvidence = () => {
-    if (busy || !model?.work.canValidate) return;
+    if (mutationsDisabled || busy || !model?.work.canValidate) return;
     setAnnouncement(
       "Running an independent validator against the displayed evidence contract.",
     );
-    void activeSession
-      .validateActiveEvidence()
+    const operation = runTrackedOperation(() =>
+      activeSession.validateActiveEvidence(),
+    );
+    if (!operation) return;
+    void operation
       .then(() => {
         onEvidenceValidate?.();
         setAnnouncement(
@@ -972,12 +1137,21 @@ export function WorldstateWorkbench({
   };
 
   const proposeReconciliation = () => {
-    if (busy || !model?.work.reconciliation.canPropose) return;
+    if (
+      mutationsDisabled ||
+      busy ||
+      !model?.work.reconciliation.canPropose
+    ) {
+      return;
+    }
     setAnnouncement(
       "Preparing an evidence-bound reconciliation candidate. Canonical worldstate will remain unchanged.",
     );
-    void activeSession
-      .proposeActiveReconciliation()
+    const operation = runTrackedOperation(() =>
+      activeSession.proposeActiveReconciliation(),
+    );
+    if (!operation) return;
+    void operation
       .then(() => {
         const next = activeSession.getSnapshot();
         if (next.activeReconciliationDeltaId) {
@@ -1003,13 +1177,22 @@ export function WorldstateWorkbench({
   };
 
   const integrateReconciliation = () => {
-    if (busy || !model?.work.reconciliation.canIntegrate) return;
+    if (
+      mutationsDisabled ||
+      busy ||
+      !model?.work.reconciliation.canIntegrate
+    ) {
+      return;
+    }
     const before = snapshot.state?.canonical.head.id;
     setAnnouncement(
       "Committing the reviewed reconciliation candidate as a human-governed revision.",
     );
-    void activeSession
-      .integrateActiveReconciliation()
+    const operation = runTrackedOperation(() =>
+      activeSession.integrateActiveReconciliation(),
+    );
+    if (!operation) return;
+    void operation
       .then(() => {
         const next = activeSession.getSnapshot();
         const after = next.state?.canonical.head.id;
@@ -1034,12 +1217,21 @@ export function WorldstateWorkbench({
   };
 
   const proposeArtifactPromotion = () => {
-    if (busy || !model?.work.artifactPromotion.canPropose) return;
+    if (
+      mutationsDisabled ||
+      busy ||
+      !model?.work.artifactPromotion.canPropose
+    ) {
+      return;
+    }
     setAnnouncement(
       "Preparing the exact artifact-promotion proposal. No authoritative Git ref will move.",
     );
-    void activeSession
-      .proposeActiveArtifactPromotion()
+    const operation = runTrackedOperation(() =>
+      activeSession.proposeActiveArtifactPromotion(),
+    );
+    if (!operation) return;
+    void operation
       .then(() => {
         const next = activeSession.getSnapshot();
         if (next.activeArtifactPromotionId) {
@@ -1065,12 +1257,21 @@ export function WorldstateWorkbench({
   };
 
   const promoteArtifact = () => {
-    if (busy || !model?.work.artifactPromotion.canPromote) return;
+    if (
+      mutationsDisabled ||
+      busy ||
+      !model?.work.artifactPromotion.canPromote
+    ) {
+      return;
+    }
     setAnnouncement(
       "Authorizing one exact target-ref promotion. The server will recheck private run evidence and independent validation before CAS.",
     );
-    void activeSession
-      .promoteActiveArtifact()
+    const operation = runTrackedOperation(() =>
+      activeSession.promoteActiveArtifact(),
+    );
+    if (!operation) return;
+    void operation
       .then(() => {
         const next = activeSession.getSnapshot();
         const promotionId = next.activeArtifactPromotionId;
@@ -1100,7 +1301,7 @@ export function WorldstateWorkbench({
   };
 
   const resetSandbox = () => {
-    if (busy) return;
+    if (mutationsDisabled || busy) return;
     if (!resetConfirming) {
       setResetConfirming(true);
       setAnnouncement("Reset requires one more explicit confirmation.");
@@ -1108,8 +1309,9 @@ export function WorldstateWorkbench({
     }
 
     setResetConfirming(false);
-    void activeSession
-      .resetSandbox()
+    const operation = runTrackedOperation(() => activeSession.resetSandbox());
+    if (!operation) return;
+    void operation
       .then(() => {
         try {
           window.localStorage.removeItem(SELECTION_STORAGE_KEY);
@@ -1134,10 +1336,20 @@ export function WorldstateWorkbench({
       snapshot.persistenceState === "corrupt";
     return (
       <main
+        aria-describedby={
+          mutationsDisabled ? mutationAccessDescriptionId : undefined
+        }
+        aria-label="Worldstate workbench"
         className={styles.workbench}
         data-morphic-root="worldstate-workbench"
+        data-mutation-access={mutationAccess}
         data-persistence-state={snapshot.persistenceState}
+        data-presentation-focus-target="workbench"
+        tabIndex={-1}
       >
+        {mutationsDisabled ? (
+          <MutationAccessNotice id={mutationAccessDescriptionId} />
+        ) : null}
         <section aria-live="polite" className={styles.loadingShell}>
           <strong>
             {failed ? "Browser ledger unavailable" : "Loading your worldstate"}
@@ -1148,9 +1360,12 @@ export function WorldstateWorkbench({
           </span>
           {failed ? (
             <button
+              aria-describedby={
+                mutationsDisabled ? mutationAccessDescriptionId : undefined
+              }
               className={styles.resetButton}
               data-confirming={resetConfirming ? "true" : "false"}
-              disabled={busy}
+              disabled={busy || mutationsDisabled}
               onClick={resetSandbox}
               type="button"
             >
@@ -1170,17 +1385,28 @@ export function WorldstateWorkbench({
 
   return (
     <main
+      aria-describedby={
+        mutationsDisabled ? mutationAccessDescriptionId : undefined
+      }
+      aria-label="Worldstate workbench"
       className={styles.workbench}
       data-morphic-root="worldstate-workbench"
+      data-mutation-access={mutationAccess}
       data-persistence-state={model.persistence.state}
+      data-presentation-focus-target="workbench"
       data-runtime-mode={model.runtime.mode}
       data-selected-object-id={selectedId}
       data-view={activeView}
       data-worldstate-revision={model.revision}
+      tabIndex={-1}
     >
       <a className={styles.skipLink} href="#primary-projection">
         Skip to project projection
       </a>
+
+      {mutationsDisabled ? (
+        <MutationAccessNotice id={mutationAccessDescriptionId} />
+      ) : null}
 
       <header
         aria-label="World and project scope"
@@ -1236,6 +1462,7 @@ export function WorldstateWorkbench({
           <SourceCapture
             busy={busy}
             draft={draft}
+            mutationsDisabled={mutationsDisabled}
             onDraftChange={setDraft}
             onSubmit={submitSource}
             placement={model.placement}
@@ -1264,6 +1491,10 @@ export function WorldstateWorkbench({
           <GovernancePanel placement={model.placement} work={model.work} />
           <CommitPanel
             busy={busy}
+            mutationAccessDescriptionId={
+              mutationsDisabled ? mutationAccessDescriptionId : undefined
+            }
+            mutationsDisabled={mutationsDisabled}
             onAccept={acceptPlacement}
             onRetry={retryPlacement}
             placement={model.placement}
@@ -1273,6 +1504,10 @@ export function WorldstateWorkbench({
         <WorkPanel
           busy={busy}
           integratingResult={integratingResult}
+          mutationAccessDescriptionId={
+            mutationsDisabled ? mutationAccessDescriptionId : undefined
+          }
+          mutationsDisabled={mutationsDisabled}
           onClearOperatorAuthority={clearOperatorAuthority}
           onOperatorCredentialChange={setOperatorCredentialDraft}
           onOperatorCredentialSubmit={authorizeOperator}
@@ -1301,6 +1536,10 @@ export function WorldstateWorkbench({
       <StatusRegion
         busy={busy}
         model={model}
+        mutationAccessDescriptionId={
+          mutationsDisabled ? mutationAccessDescriptionId : undefined
+        }
+        mutationsDisabled={mutationsDisabled}
         onReset={resetSandbox}
         resetConfirming={resetConfirming}
         selectedLabel={selectedNode?.label ?? selectedId}
@@ -1317,6 +1556,7 @@ interface SourceCaptureProps {
   placement: PlacementSurface;
   draft: string;
   busy: boolean;
+  mutationsDisabled: boolean;
   onDraftChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }
@@ -1325,15 +1565,24 @@ function SourceCapture({
   placement,
   draft,
   busy,
+  mutationsDisabled,
   onDraftChange,
   onSubmit,
 }: SourceCaptureProps) {
+  const sourceCaptureGateId = useId();
   if (!placement.sourceText) {
     return (
-      <form className={styles.captureComposer} onSubmit={onSubmit}>
+      <form
+        className={styles.captureComposer}
+        data-gate-state={mutationsDisabled ? "opening" : "ready"}
+        onSubmit={onSubmit}
+      >
         <label>
           <span className={styles.regionKicker}>Capture a source</span>
           <textarea
+            aria-describedby={
+              mutationsDisabled ? sourceCaptureGateId : undefined
+            }
             aria-label="Source text"
             disabled={busy}
             maxLength={4000}
@@ -1343,12 +1592,21 @@ function SourceCapture({
           />
         </label>
         <button
+          aria-describedby={
+            mutationsDisabled ? sourceCaptureGateId : undefined
+          }
           className={styles.captureButton}
-          disabled={busy || !draft.trim()}
+          disabled={busy || mutationsDisabled || !draft.trim()}
           type="submit"
         >
           {busy ? "Saving source…" : "Capture & place"}
         </button>
+        {mutationsDisabled ? (
+          <p className={styles.captureGate} id={sourceCaptureGateId}>
+            Finish or skip the opening guide before saving this source. Draft
+            text stays in this page until then.
+          </p>
+        ) : null}
       </form>
     );
   }
@@ -1726,11 +1984,20 @@ function GovernancePanel({
 interface CommitPanelProps {
   placement: PlacementSurface;
   busy: boolean;
+  mutationAccessDescriptionId?: string;
+  mutationsDisabled: boolean;
   onAccept: () => void;
   onRetry: () => void;
 }
 
-function CommitPanel({ placement, busy, onAccept, onRetry }: CommitPanelProps) {
+function CommitPanel({
+  placement,
+  busy,
+  mutationAccessDescriptionId,
+  mutationsDisabled,
+  onAccept,
+  onRetry,
+}: CommitPanelProps) {
   return (
     <section
       aria-label="Semantic commit"
@@ -1757,8 +2024,9 @@ function CommitPanel({ placement, busy, onAccept, onRetry }: CommitPanelProps) {
         {placement.retryable ? (
           <div className={styles.secondaryActions}>
             <button
+              aria-describedby={mutationAccessDescriptionId}
               className={styles.retryButton}
-              disabled={busy}
+              disabled={busy || mutationsDisabled}
               onClick={onRetry}
               type="button"
             >
@@ -1767,9 +2035,10 @@ function CommitPanel({ placement, busy, onAccept, onRetry }: CommitPanelProps) {
           </div>
         ) : null}
         <button
+          aria-describedby={mutationAccessDescriptionId}
           className={styles.commitButton}
           data-semantic-action="accept-placement"
-          disabled={busy || !placement.canAccept}
+          disabled={busy || mutationsDisabled || !placement.canAccept}
           onClick={onAccept}
           type="button"
         >
@@ -1790,6 +2059,8 @@ function CommitPanel({ placement, busy, onAccept, onRetry }: CommitPanelProps) {
 interface WorkPanelProps {
   work: WorkSurface;
   busy: boolean;
+  mutationAccessDescriptionId?: string;
+  mutationsDisabled: boolean;
   onPrepare: () => void;
   onAuthorize: () => void;
   onValidate: () => void;
@@ -1813,6 +2084,8 @@ interface WorkPanelProps {
 export function WorkPanel({
   work,
   busy,
+  mutationAccessDescriptionId,
+  mutationsDisabled,
   onPrepare,
   onAuthorize,
   onValidate,
@@ -1946,6 +2219,7 @@ export function WorkPanel({
       aria-labelledby="work-heading"
       className={styles.workRegion}
       data-morphic-region="work"
+      data-mutation-access={mutationsDisabled ? "presentation-only" : "enabled"}
       data-state={work.state}
       data-state-family="work"
       data-state-surface={workStateSurface(work.state)}
@@ -1993,8 +2267,10 @@ export function WorkPanel({
                 Operator bearer
               </label>
               <input
+                aria-describedby={mutationAccessDescriptionId}
                 autoComplete="off"
                 data-persistence="memory-only"
+                disabled={mutationsDisabled}
                 id="odeu-operator-credential"
                 minLength={32}
                 onChange={(event) =>
@@ -2006,8 +2282,11 @@ export function WorkPanel({
                 value={operatorCredentialDraft}
               />
               <button
+                aria-describedby={mutationAccessDescriptionId}
                 className={styles.retryButton}
-                disabled={busy || operatorCredentialDraft.length < 32}
+                disabled={
+                  busy || mutationsDisabled || operatorCredentialDraft.length < 32
+                }
                 type="submit"
               >
                 Use in this page only
@@ -2034,9 +2313,10 @@ export function WorkPanel({
           <p>{work.prepareGateReason}</p>
         </div>
         <button
+          aria-describedby={mutationAccessDescriptionId}
           className={styles.previewButton}
           data-semantic-action="prepare-agent-brief"
-          disabled={busy || !work.canPrepare}
+          disabled={busy || mutationsDisabled || !work.canPrepare}
           onClick={onPrepare}
           type="button"
         >
@@ -2284,12 +2564,15 @@ export function WorkPanel({
           <p>{work.dispatchGateReason}</p>
         </div>
         <button
+          aria-describedby={mutationAccessDescriptionId}
           className={styles.dispatchButton}
           data-semantic-action={
             liveMode ? "authorize-live-codex-run" : "authorize-fixture-replay"
           }
           disabled={
-            busy || (!work.canAuthorize && !work.canRetryDispatch)
+            busy ||
+            mutationsDisabled ||
+            (!work.canAuthorize && !work.canRetryDispatch)
           }
           onClick={onAuthorize}
           type="button"
@@ -2796,14 +3079,18 @@ export function WorkPanel({
                 </p>
               </div>
               <button
-                aria-describedby="validation-gate-reason"
+                aria-describedby={
+                  mutationAccessDescriptionId
+                    ? `validation-gate-reason ${mutationAccessDescriptionId}`
+                    : "validation-gate-reason"
+                }
                 className={styles.validationButton}
                 data-semantic-action={
                   liveMode
                     ? "validate-sealed-live-candidate"
                     : "validate-replay-evidence"
                 }
-                disabled={busy || !work.canValidate}
+                disabled={busy || mutationsDisabled || !work.canValidate}
                 onClick={onValidate}
                 type="button"
               >
@@ -3034,9 +3321,12 @@ export function WorkPanel({
               <p>{reconciliation.proposalGateReason}</p>
             </div>
             <button
+              aria-describedby={mutationAccessDescriptionId}
               className={styles.reconciliationProposalButton}
               data-semantic-action="prepare-reconciliation-delta"
-              disabled={busy || !reconciliation.canPropose}
+              disabled={
+                busy || mutationsDisabled || !reconciliation.canPropose
+              }
               onClick={onProposeReconciliation}
               type="button"
             >
@@ -3264,9 +3554,12 @@ export function WorkPanel({
             </small>
           </div>
           <button
+            aria-describedby={mutationAccessDescriptionId}
             className={styles.integrateButton}
             data-semantic-action="integrate-reconciliation-delta"
-            disabled={busy || !reconciliation.canIntegrate}
+            disabled={
+              busy || mutationsDisabled || !reconciliation.canIntegrate
+            }
             onClick={onIntegrate}
             type="button"
           >
@@ -3393,9 +3686,12 @@ export function WorkPanel({
 
           <div className={styles.artifactPromotionActions}>
             <button
+              aria-describedby={mutationAccessDescriptionId}
               className={styles.integrateButton}
               data-semantic-action="propose-artifact-promotion"
-              disabled={busy || !artifactPromotion.canPropose}
+              disabled={
+                busy || mutationsDisabled || !artifactPromotion.canPropose
+              }
               onClick={onProposePromotion}
               type="button"
             >
@@ -3407,9 +3703,12 @@ export function WorkPanel({
                   : "Prepare promotion proposal"}
             </button>
             <button
+              aria-describedby={mutationAccessDescriptionId}
               className={styles.promoteArtifactButton}
               data-semantic-action="promote-reviewed-artifact"
-              disabled={busy || !artifactPromotion.canPromote}
+              disabled={
+                busy || mutationsDisabled || !artifactPromotion.canPromote
+              }
               onClick={onPromoteArtifact}
               type="button"
             >
@@ -3436,6 +3735,8 @@ export function WorkPanel({
 interface StatusRegionProps {
   busy: boolean;
   model: WorkbenchViewModel;
+  mutationAccessDescriptionId?: string;
+  mutationsDisabled: boolean;
   selectedLabel: string;
   resetConfirming: boolean;
   onReset: () => void;
@@ -3444,6 +3745,8 @@ interface StatusRegionProps {
 function StatusRegion({
   busy,
   model,
+  mutationAccessDescriptionId,
+  mutationsDisabled,
   selectedLabel,
   resetConfirming,
   onReset,
@@ -3488,9 +3791,10 @@ function StatusRegion({
       </div>
       <div className={styles.resetLane} data-morphic-lane="sandbox-reset">
         <button
+          aria-describedby={mutationAccessDescriptionId}
           className={styles.resetButton}
           data-confirming={resetConfirming ? "true" : "false"}
-          disabled={busy}
+          disabled={busy || mutationsDisabled}
           onClick={onReset}
           type="button"
         >

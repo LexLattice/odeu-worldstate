@@ -31,6 +31,33 @@
   transform: translateY(0);
 }
 
+.mutationAccessNotice {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  margin: 0.8rem 1rem 0;
+  border: 1px solid rgba(244, 200, 120, 0.3);
+  border-radius: 0.55rem;
+  background: rgba(244, 200, 120, 0.055);
+  color: var(--amber);
+  padding: 0.65rem 0.8rem;
+}
+
+.mutationAccessNotice svg {
+  flex: 0 0 auto;
+  width: 1rem;
+}
+
+.mutationAccessNotice span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.mutationAccessNotice strong { font-size: 0.68rem; }
+.mutationAccessNotice small { color: var(--muted); font-size: 0.62rem; line-height: 1.4; }
+
 .scopeRegion {
   position: sticky;
   z-index: 20;
@@ -734,6 +761,14 @@
 }
 
 .captureComposer textarea::placeholder { color: var(--faint); }
+
+.captureGate {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.63rem;
+  line-height: 1.45;
+}
 
 .captureButton,
 .retryButton,

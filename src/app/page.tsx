@@ -1,5 +1,5 @@
-import { WorldstateWorkbench } from "@/components/worldstate/worldstate-workbench";
+import { OpeningOnboardingExperience } from "@/components/onboarding/opening-onboarding-experience";
 
 export default function Home() {
-  return <WorldstateWorkbench />;
+  return <OpeningOnboardingExperience />;
 }

@@ -80,6 +80,11 @@ The transcript remains inspectable as provenance.
 - Outline, Map, Timeline, and Focus projections derived from the reduced ledger, with
   shared identity, persisted selection, provisional candidate overlays, and
   deterministic projection-only graph layout.
+- A consent-first opening guide with `Interactive`, `Watch only`, and `Skip` modes,
+  pause/resume, caption visibility, and replay. Watch-only guidance uses typed,
+  presentation-only project, view, and object-selection commands; the chapter stops
+  at the source-capture handoff without adding a canonical event, advancing a
+  revision, calling a provider, or granting agent authority.
 - A durable, least-context browser brief preview compiled from the latest accepted
   Task, with shared context, local private/out-of-scope omission receipts, immutable
   revision and artifact bindings, authority limits, unknowns, and evidence requirements.
@@ -150,8 +155,9 @@ creation. It is not an authorized ODEU run and cannot produce closure, candidate
 reconciliation, or promotion evidence. The application's provider-key-backed live
 route and live placement remain unobserved because neither `OPENAI_API_KEY` nor
 `CODEX_API_KEY` is configured. Remaining product work includes that end-to-end live
-route evidence, voice capture, correction/defer/reject controls, onboarding,
-multi-project routing, and Codex thread resume.
+route evidence, the later source-capture-through-reconciliation onboarding chapters,
+voice capture, correction/defer/reject controls, multi-project routing, and Codex
+thread resume.
 
 ## Example journey
 
