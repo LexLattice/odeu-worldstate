@@ -522,6 +522,18 @@ describe("OpeningOnboardingExperience", () => {
 
     reportPlacement({
       ...REVIEWABLE_BUDGET_PLACEMENT,
+      deltaId: "delta-unreviewed-placement",
+    });
+    expect(workbenchProps().mutationAccess).toBe("presentation-only");
+    expect(
+      screen.getByText(/frozen placement no longer satisfies/i),
+    ).toBeVisible();
+
+    reportPlacement(REVIEWABLE_BUDGET_PLACEMENT);
+    expect(workbenchProps().mutationAccess).toBe("guided-adoption");
+
+    reportPlacement({
+      ...REVIEWABLE_BUDGET_PLACEMENT,
       operationState: "accepting",
       persistenceState: "saving",
       canAccept: false,
@@ -544,6 +556,12 @@ describe("OpeningOnboardingExperience", () => {
     ).toHaveFocus();
     expect(screen.getByText(/revision-guided-adoption/)).toBeVisible();
     expect(workbenchProps().mutationAccess).toBe("guided-adoption");
+
+    reportPlacement({
+      ...REVIEWABLE_BUDGET_PLACEMENT,
+      deltaId: "delta-after-completion",
+    });
+    expect(workbenchProps().mutationAccess).toBe("presentation-only");
 
     await user.click(screen.getByRole("button", { name: "Close guide" }));
     expect(workbenchProps().mutationAccess).toBe("enabled");

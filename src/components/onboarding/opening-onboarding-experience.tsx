@@ -495,6 +495,18 @@ export function OpeningOnboardingExperience() {
       placementHandoff: sourceView.handoff,
     }) && !workbenchBusy;
   const canContinueAdoption = adoptionView.canContinue;
+  const adoptionReviewable = reviewableSemanticAdoptionObserved(
+    placement,
+    adoptionView.placementHandoff,
+  );
+  const adoptionObserved = adoptedSemanticPlacementObserved(
+    placement,
+    adoptionView.placementHandoff,
+  );
+  const guidedAdoptionAuthority = adoptionComplete
+    ? adoptionObserved
+    : adoptionStep?.id === "adopt-placement" &&
+      (adoptionReviewable || adoptionObserved);
   const sourceReviewReady =
     sourceStep?.id === "capture-source" && canContinueSource;
   const sourceRequestPending =
@@ -504,9 +516,9 @@ export function OpeningOnboardingExperience() {
   const workbenchMutationAccess =
     openingClosed || sourceClosed || adoptionClosed
       ? "enabled"
-      : adoptionComplete || adoptionStep?.id === "adopt-placement"
+      : guidedAdoptionAuthority
         ? "guided-adoption"
-        : adoptionGuideActive
+        : adoptionComplete || adoptionGuideActive
           ? "presentation-only"
           : sourceGuideActive || sourceComplete
             ? "guided-capture"
@@ -655,14 +667,6 @@ export function OpeningOnboardingExperience() {
     });
   };
 
-  const adoptionReviewable = reviewableSemanticAdoptionObserved(
-    placement,
-    adoptionView.placementHandoff,
-  );
-  const adoptionObserved = adoptedSemanticPlacementObserved(
-    placement,
-    adoptionView.placementHandoff,
-  );
   let adoptionPrerequisiteMessage =
     adoptionStep?.prerequisite ??
     "Complete the visible semantic-adoption review step.";

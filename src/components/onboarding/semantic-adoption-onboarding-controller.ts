@@ -107,7 +107,7 @@ function adoptedHandoff(
   if (
     !adoptedSemanticPlacementObserved(placement, handoff) ||
     !placement?.acceptedRevisionId ||
-    !placement.headRevisionId ||
+    !placement?.headRevisionId ||
     !handoff
   ) {
     return null;
