@@ -6,6 +6,7 @@ import type {
   WorldstatePresentationCommand,
   WorldstatePresentationState,
 } from "@/components/worldstate/presentation";
+import type { WorldstatePlacementObservation } from "@/components/worldstate/placement-observation";
 
 import { OpeningOnboardingExperience } from "./opening-onboarding-experience";
 
@@ -29,14 +30,23 @@ vi.mock("@/components/worldstate/worldstate-workbench", () => ({
           Complete the move for less than €4,000
         </button>
         <textarea aria-label="Source text" />
+        <h2 data-placement-focus-target="receipt" tabIndex={-1}>
+          Placement receipt
+        </h2>
       </main>
     );
   },
 }));
 
 interface MockWorkbenchProps {
-  readonly mutationAccess?: "enabled" | "presentation-only";
+  readonly mutationAccess?:
+    | "enabled"
+    | "presentation-only"
+    | "guided-capture";
   readonly onOperationBusyChange?: (busy: boolean) => void;
+  readonly onPlacementObservationChange?: (
+    observation: WorldstatePlacementObservation,
+  ) => void;
   readonly presentationCommand?: WorldstatePresentationCommand;
   readonly onPresentationStateChange?: (
     state: WorldstatePresentationState,
@@ -59,6 +69,43 @@ const COMPLETE_PRESENTATION: WorldstatePresentationState = {
   selectedObjectLabel: "Complete the move for less than €4,000",
 };
 
+const IDLE_PLACEMENT: WorldstatePlacementObservation = {
+  state: "idle",
+  operationState: "idle",
+  persistenceState: "saved",
+  sourceId: null,
+  requestId: null,
+  requestSelectedNodeId: null,
+  attemptId: null,
+  exchangeId: null,
+  receiptId: null,
+  deltaId: null,
+  candidateId: null,
+  locationTargetNodeId: null,
+  baseRevisionId: null,
+  headRevisionId: "revision-home-move-seed",
+  managerMode: "fixture",
+  managerLabel: "Fixture placement manager",
+  retryable: false,
+  canAccept: false,
+};
+
+const REVIEWABLE_BUDGET_PLACEMENT: WorldstatePlacementObservation = {
+  ...IDLE_PLACEMENT,
+  state: "reviewable",
+  sourceId: "source-guided-placement",
+  requestId: "request-guided-placement",
+  requestSelectedNodeId: "node-area-budget",
+  attemptId: "source-placement-attempt:request-guided-placement",
+  exchangeId: "source-placement-exchange:request-guided-placement",
+  receiptId: "receipt-guided-placement",
+  deltaId: "delta-guided-placement",
+  candidateId: "node-guided-placement",
+  locationTargetNodeId: "node-area-budget",
+  baseRevisionId: "revision-home-move-seed",
+  canAccept: true,
+};
+
 function workbenchProps(): MockWorkbenchProps {
   return workbenchHarness.props as MockWorkbenchProps;
 }
@@ -72,6 +119,12 @@ function reportPresentation(state: WorldstatePresentationState) {
 function reportOperationBusy(busy: boolean) {
   act(() => {
     workbenchProps().onOperationBusyChange?.(busy);
+  });
+}
+
+function reportPlacement(observation: WorldstatePlacementObservation) {
+  act(() => {
+    workbenchProps().onPlacementObservationChange?.(observation);
   });
 }
 
@@ -235,11 +288,14 @@ describe("OpeningOnboardingExperience", () => {
     await user.click(screen.getByRole("button", { name: "Finish opening" }));
     expect(
       screen.getByRole("heading", {
-        name: "Opening complete · normal workbench available",
+        name: "Opening complete · choose the next boundary",
       }),
     ).toHaveFocus();
     expect(screen.getByTestId("worldstate-workbench")).toBeInTheDocument();
-    expect(workbenchProps().mutationAccess).toBe("enabled");
+    expect(workbenchProps().mutationAccess).toBe("presentation-only");
+    expect(
+      screen.getByRole("button", { name: "Start guided placement" }),
+    ).toBeDisabled();
 
     const replayButton = screen.getByRole("button", {
       name: "Replay opening",
@@ -247,7 +303,7 @@ describe("OpeningOnboardingExperience", () => {
     reportOperationBusy(true);
     expect(replayButton).toBeDisabled();
     expect(replayButton).toHaveAccessibleDescription(
-      /A workbench operation is still in flight/i,
+      /The workbench is still reporting its state/i,
     );
     reportOperationBusy(false);
     expect(replayButton).toBeEnabled();
@@ -265,9 +321,98 @@ describe("OpeningOnboardingExperience", () => {
     await user.click(screen.getByRole("button", { name: "Close guide" }));
 
     expect(
-      screen.queryByText("Opening complete · normal workbench available"),
+      screen.queryByText("Opening complete · choose the next boundary"),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("worldstate-workbench")).toHaveFocus();
     expect(workbenchProps().mutationAccess).toBe("enabled");
+  });
+
+  it("uses typed Budget selection, user-owned capture, and an explicit receipt review before restoring adoption", async () => {
+    const user = userEvent.setup();
+    render(<OpeningOnboardingExperience />);
+
+    await user.click(screen.getByRole("button", { name: /Watch only/i }));
+    reportPlacement(IDLE_PLACEMENT);
+    reportPresentation({
+      ...OTHER_PRESENTATION,
+      projectId: "project-home-move",
+      projectLabel: "Plan our home move",
+    });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    reportPresentation({
+      ...OTHER_PRESENTATION,
+      projectId: "project-home-move",
+      projectLabel: "Plan our home move",
+      view: "outline",
+    });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    reportPresentation(COMPLETE_PRESENTATION);
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Finish opening" }));
+
+    expect(workbenchProps().mutationAccess).toBe("presentation-only");
+    await user.click(
+      screen.getByRole("button", { name: "Start guided placement" }),
+    );
+
+    expect(workbenchProps().mutationAccess).toBe("guided-capture");
+    expect(workbenchProps().presentationCommand).toEqual({
+      id: "source-placement-onboarding:0:select-budget-context",
+      type: "select_object",
+      objectId: "node-area-budget",
+    });
+    expect(
+      screen.getByRole("heading", { name: "Set the placement context" }),
+    ).toHaveFocus();
+
+    reportPresentation({
+      ...COMPLETE_PRESENTATION,
+      selectedObjectId: "node-area-budget",
+      selectedObjectLabel: "Budget",
+    });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(workbenchProps().presentationCommand).toBeUndefined();
+    expect(
+      screen.getByRole("heading", {
+        name: "Save the idea, then ask where it fits",
+      }),
+    ).toHaveFocus();
+    expect(
+      screen.getByRole("button", { name: "Waiting for placement" }),
+    ).toBeDisabled();
+
+    reportPlacement(REVIEWABLE_BUDGET_PLACEMENT);
+    const reviewButton = screen.getByRole("button", {
+      name: "Review placement",
+    });
+    expect(reviewButton).toBeEnabled();
+    expect(screen.getByText("Reviewable · provisional")).toBeVisible();
+    expect(screen.getByText(/Unchanged · revision-home-move-seed/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Placement receipt" })).not.toHaveFocus();
+
+    await user.click(reviewButton);
+    expect(
+      screen.getByRole("heading", { name: "Placement receipt" }),
+    ).toHaveFocus();
+    expect(
+      screen.getByRole("heading", {
+        name: "Review the interpretation before mutation",
+      }),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Finish source chapter" }),
+    );
+    expect(
+      screen.getByRole("heading", {
+        name: "Source placement reviewed · decision remains separate",
+      }),
+    ).toHaveFocus();
+    expect(workbenchProps().mutationAccess).toBe("guided-capture");
+
+    await user.click(screen.getByRole("button", { name: "Close guide" }));
+    expect(workbenchProps().mutationAccess).toBe("enabled");
+    expect(screen.getByTestId("worldstate-workbench")).toHaveFocus();
   });
 });

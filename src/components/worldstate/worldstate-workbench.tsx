@@ -49,6 +49,11 @@ import type {
   WorldstatePresentationCommand,
   WorldstatePresentationState,
 } from "./presentation";
+import {
+  deriveWorldstatePlacementObservation,
+  type WorldstatePlacementObservation,
+  worldstatePlacementObservationEqual,
+} from "./placement-observation";
 import { ProjectionSurface } from "./projections";
 import type {
   PlacementSurface,
@@ -193,7 +198,7 @@ function placementStateLabel(state: PlacementSurface["state"]): string {
   const labels: Record<PlacementSurface["state"], string> = {
     idle: "Awaiting source",
     loading: "Interpreting · source saved",
-    reviewable: "Suggested · no change yet",
+    reviewable: "Suggested · canonical unchanged",
     needs_clarification: "Clarification needed",
     failed: "Placement failed",
     stale: "Stale · commit blocked",
@@ -529,15 +534,23 @@ function storeSelection(selection: string) {
   }
 }
 
+export type WorldstateWorkbenchMutationAccess =
+  | "enabled"
+  | "presentation-only"
+  | "guided-capture";
+
 export interface WorldstateWorkbenchProps {
   initialView?: ProjectionView;
   session?: WorldstateSession;
   autoInitialize?: boolean;
-  mutationAccess?: "enabled" | "presentation-only";
+  mutationAccess?: WorldstateWorkbenchMutationAccess;
   presentationCommand?: WorldstatePresentationCommand;
   onOperationBusyChange?: (busy: boolean) => void;
   onPresentationStateChange?: (
     state: WorldstatePresentationState,
+  ) => void;
+  onPlacementObservationChange?: (
+    observation: WorldstatePlacementObservation,
   ) => void;
   onSelectionChange?: (worldstateId: string) => void;
   onSemanticCommit?: () => void;
@@ -550,22 +563,35 @@ export interface WorldstateWorkbenchProps {
   onArtifactPromote?: () => void;
 }
 
-function MutationAccessNotice({ id }: { readonly id: string }) {
+function MutationAccessNotice({
+  access,
+  id,
+}: {
+  readonly access: Exclude<WorldstateWorkbenchMutationAccess, "enabled">;
+  readonly id: string;
+}) {
+  const guidedCapture = access === "guided-capture";
   return (
     <div
       className={styles.mutationAccessNotice}
-      data-morphic-lane="presentation-only-access"
+      data-morphic-lane={
+        guidedCapture ? "guided-capture-access" : "presentation-only-access"
+      }
       data-state-surface="diagnostic-status-surface"
       id={id}
       role="status"
     >
       <ShieldIcon />
       <span>
-        <strong>Presentation-only opening</strong>
+        <strong>
+          {guidedCapture
+            ? "Guided source placement"
+            : "Presentation-only opening"}
+        </strong>
         <small>
-          Finish or skip the opening guide to restore durable, provider, and
-          authority-increasing actions. Current evidence and eligibility are
-          unchanged.
+          {guidedCapture
+            ? "Capture and exact placement retry are available. Semantic commit, reset, agent work, validation, reconciliation, integration, and promotion remain locked until you leave this guide."
+            : "Continue or skip the opening guide to reach guided source capture. Durable, provider, destructive, and authority-increasing actions remain locked."}
         </small>
       </span>
     </div>
@@ -579,6 +605,7 @@ export function WorldstateWorkbench({
   mutationAccess = "enabled",
   presentationCommand,
   onOperationBusyChange,
+  onPlacementObservationChange,
   onPresentationStateChange,
   onSelectionChange,
   onSemanticCommit,
@@ -609,7 +636,12 @@ export function WorldstateWorkbench({
   const handledPresentationCommandIds = useRef(new Set<string>());
   const localOperationPendingRef = useRef(false);
   const onOperationBusyChangeRef = useRef(onOperationBusyChange);
+  const onPlacementObservationChangeRef = useRef(
+    onPlacementObservationChange,
+  );
   const onPresentationStateChangeRef = useRef(onPresentationStateChange);
+  const lastPlacementObservationRef =
+    useRef<WorldstatePlacementObservation | null>(null);
   const [selectedView, setSelectedView] = useState<ProjectionView | undefined>(
     initialView,
   );
@@ -625,6 +657,7 @@ export function WorldstateWorkbench({
   const activeView = selectedView ?? (narrowDefault ? "focus" : "outline");
   const busy = localOperationPending || snapshot.operationState !== "idle";
   const mutationsDisabled = mutationAccess !== "enabled";
+  const captureMutationsDisabled = mutationAccess === "presentation-only";
   const validatingEvidence =
     snapshot.operationState === "validating_evidence" ||
     snapshot.operationState === "persisting_validation";
@@ -659,8 +692,13 @@ export function WorldstateWorkbench({
 
   useEffect(() => {
     onOperationBusyChangeRef.current = onOperationBusyChange;
+    onPlacementObservationChangeRef.current = onPlacementObservationChange;
     onPresentationStateChangeRef.current = onPresentationStateChange;
-  }, [onOperationBusyChange, onPresentationStateChange]);
+  }, [
+    onOperationBusyChange,
+    onPlacementObservationChange,
+    onPresentationStateChange,
+  ]);
 
   useEffect(() => {
     onOperationBusyChangeRef.current?.(busy);
@@ -738,6 +776,35 @@ export function WorldstateWorkbench({
       placement: withSessionPlacementTruth(projected.placement, snapshot),
     };
   }, [snapshot]);
+
+  const placementObservation = useMemo(
+    () =>
+      model
+        ? deriveWorldstatePlacementObservation({
+            placement: model.placement,
+            operationState: snapshot.operationState,
+            persistenceState: snapshot.persistenceState,
+            headRevisionId: snapshot.state?.canonical.head.id ?? null,
+            managerMode: model.runtime.mode,
+          })
+        : null,
+    [model, snapshot.operationState, snapshot.persistenceState, snapshot.state],
+  );
+
+  useEffect(() => {
+    if (
+      !placementObservation ||
+      worldstatePlacementObservationEqual(
+        lastPlacementObservationRef.current,
+        placementObservation,
+      )
+    ) {
+      return;
+    }
+
+    lastPlacementObservationRef.current = placementObservation;
+    onPlacementObservationChangeRef.current?.(placementObservation);
+  }, [placementObservation]);
 
   useEffect(() => {
     if (!model) return;
@@ -867,10 +934,15 @@ export function WorldstateWorkbench({
 
   useEffect(() => {
     if (!model) return;
+    const loadingPlacementMessage =
+      snapshot.operationState === "capturing"
+        ? "Saving the original source before placement begins."
+        : snapshot.operationState === "placing"
+          ? "Source saved. Finding where this fits."
+          : "Source saved. Persisting the placement evidence.";
     const placementMessages: Record<PlacementSurface["state"], string> = {
       idle: "The sandbox is ready. Capture a source to request placement.",
-      loading:
-        "The source is durable. Placement evidence is still being saved.",
+      loading: loadingPlacementMessage,
       reviewable:
         "A persisted placement is ready for human review. Canonical state is unchanged.",
       needs_clarification:
@@ -963,6 +1035,7 @@ export function WorldstateWorkbench({
     promotingArtifact,
     proposingPromotion,
     proposingReconciliation,
+    snapshot.operationState,
     validatingEvidence,
   ]);
 
@@ -1013,7 +1086,7 @@ export function WorldstateWorkbench({
   const submitSource = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const source = draft.trim();
-    if (mutationsDisabled || !source || busy) return;
+    if (captureMutationsDisabled || !source || busy) return;
     setAnnouncement("Capturing the source before placement begins.");
     const operation = runTrackedOperation(() =>
       activeSession.captureAndPlace(source, selectedId),
@@ -1027,7 +1100,7 @@ export function WorldstateWorkbench({
   };
 
   const retryPlacement = () => {
-    if (mutationsDisabled || busy) return;
+    if (captureMutationsDisabled || busy) return;
     setAnnouncement("Retrying placement from the existing durable source.");
     const operation = runTrackedOperation(() => activeSession.retryPlacement());
     if (!operation) return;
@@ -1348,7 +1421,13 @@ export function WorldstateWorkbench({
         tabIndex={-1}
       >
         {mutationsDisabled ? (
-          <MutationAccessNotice id={mutationAccessDescriptionId} />
+          <MutationAccessNotice
+            access={mutationAccess as Exclude<
+              WorldstateWorkbenchMutationAccess,
+              "enabled"
+            >}
+            id={mutationAccessDescriptionId}
+          />
         ) : null}
         <section aria-live="polite" className={styles.loadingShell}>
           <strong>
@@ -1405,7 +1484,13 @@ export function WorldstateWorkbench({
       </a>
 
       {mutationsDisabled ? (
-        <MutationAccessNotice id={mutationAccessDescriptionId} />
+        <MutationAccessNotice
+          access={mutationAccess as Exclude<
+            WorldstateWorkbenchMutationAccess,
+            "enabled"
+          >}
+          id={mutationAccessDescriptionId}
+        />
       ) : null}
 
       <header
@@ -1461,8 +1546,8 @@ export function WorldstateWorkbench({
         >
           <SourceCapture
             busy={busy}
+            captureDisabled={captureMutationsDisabled}
             draft={draft}
-            mutationsDisabled={mutationsDisabled}
             onDraftChange={setDraft}
             onSubmit={submitSource}
             placement={model.placement}
@@ -1498,6 +1583,7 @@ export function WorldstateWorkbench({
             onAccept={acceptPlacement}
             onRetry={retryPlacement}
             placement={model.placement}
+            retryDisabled={captureMutationsDisabled}
           />
         </aside>
 
@@ -1507,6 +1593,7 @@ export function WorldstateWorkbench({
           mutationAccessDescriptionId={
             mutationsDisabled ? mutationAccessDescriptionId : undefined
           }
+          mutationAccess={mutationAccess}
           mutationsDisabled={mutationsDisabled}
           onClearOperatorAuthority={clearOperatorAuthority}
           onOperatorCredentialChange={setOperatorCredentialDraft}
@@ -1556,7 +1643,7 @@ interface SourceCaptureProps {
   placement: PlacementSurface;
   draft: string;
   busy: boolean;
-  mutationsDisabled: boolean;
+  captureDisabled: boolean;
   onDraftChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }
@@ -1565,7 +1652,7 @@ function SourceCapture({
   placement,
   draft,
   busy,
-  mutationsDisabled,
+  captureDisabled,
   onDraftChange,
   onSubmit,
 }: SourceCaptureProps) {
@@ -1573,15 +1660,19 @@ function SourceCapture({
   if (!placement.sourceText) {
     return (
       <form
+        aria-busy={placement.state === "loading"}
         className={styles.captureComposer}
-        data-gate-state={mutationsDisabled ? "opening" : "ready"}
+        data-action-cluster="source-placement-request"
+        data-gate-state={captureDisabled ? "opening" : "ready"}
+        data-morphic-lane="source-capture"
+        data-onboarding-target="source-capture"
         onSubmit={onSubmit}
       >
         <label>
           <span className={styles.regionKicker}>Capture a source</span>
           <textarea
             aria-describedby={
-              mutationsDisabled ? sourceCaptureGateId : undefined
+              captureDisabled ? sourceCaptureGateId : undefined
             }
             aria-label="Source text"
             disabled={busy}
@@ -1593,15 +1684,19 @@ function SourceCapture({
         </label>
         <button
           aria-describedby={
-            mutationsDisabled ? sourceCaptureGateId : undefined
+            captureDisabled ? sourceCaptureGateId : undefined
           }
           className={styles.captureButton}
-          disabled={busy || mutationsDisabled || !draft.trim()}
+          disabled={busy || captureDisabled || !draft.trim()}
           type="submit"
         >
           {busy ? "Saving source…" : "Capture & place"}
         </button>
-        {mutationsDisabled ? (
+        <p className={styles.captureContract}>
+          Saves the original source and requests a provisional placement. It
+          does not adopt a worldstate change or authorize agent work.
+        </p>
+        {captureDisabled ? (
           <p className={styles.captureGate} id={sourceCaptureGateId}>
             Finish or skip the opening guide before saving this source. Draft
             text stays in this page until then.
@@ -1643,8 +1738,10 @@ function PlacementReceipt({ placement }: { placement: PlacementSurface }) {
 
   return (
     <section
+      aria-busy={placement.state === "loading"}
       aria-labelledby="placement-heading"
       className={styles.receiptPanel}
+      data-evidence-anchor="placement-receipt"
       data-morphic-region="interpretation"
       data-state={posture}
       data-state-family="governance"
@@ -1653,7 +1750,13 @@ function PlacementReceipt({ placement }: { placement: PlacementSurface }) {
       <div className={styles.panelHeader}>
         <div>
           <span className={styles.regionKicker}>Where this fits</span>
-          <h2 id="placement-heading">Placement receipt</h2>
+          <h2
+            data-placement-focus-target="receipt"
+            id="placement-heading"
+            tabIndex={-1}
+          >
+            Placement receipt
+          </h2>
         </div>
         <span className={styles.postureBadge} data-state={posture}>
           <i /> {placementStateLabel(placement.state)}
@@ -1733,6 +1836,14 @@ function PlacementReceipt({ placement }: { placement: PlacementSurface }) {
           <div>
             <dt>Confidence</dt>
             <dd>{placement.confidence ?? "Not reported"}</dd>
+          </div>
+          <div>
+            <dt>Placement manager</dt>
+            <dd>{placement.managerLabel}</dd>
+          </div>
+          <div>
+            <dt>Based on revision</dt>
+            <dd>{placement.baseRevisionId ?? "Not recorded"}</dd>
           </div>
         </dl>
       ) : null}
@@ -1839,7 +1950,10 @@ function EvidencePanel({ model }: { model: WorkbenchViewModel }) {
   const placementRecordCount = [
     model.revision,
     placement.sourceId,
+    placement.requestId,
+    placement.attemptId,
     placement.exchangeId,
+    placement.receiptId,
     placement.deltaId,
   ].filter(Boolean).length;
 
@@ -1856,7 +1970,7 @@ function EvidencePanel({ model }: { model: WorkbenchViewModel }) {
           <h2 id="evidence-heading">Evidence &amp; status</h2>
         </div>
         <span className={styles.evidenceCount}>
-          {String(placementRecordCount).padStart(2, "0")} placement{" "}
+          {String(placementRecordCount).padStart(2, "0")} exact lineage{" "}
           {placementRecordCount === 1 ? "record" : "records"}
         </span>
       </div>
@@ -1900,20 +2014,33 @@ function EvidencePanel({ model }: { model: WorkbenchViewModel }) {
           </div>
           <span>{placement.sourceId ? "Exact" : "Waiting"}</span>
         </li>
-        <li data-evidence-anchor="placement-exchange">
+        <li data-evidence-anchor="placement-request">
           <span className={styles.evidenceGlyph}>02</span>
+          <div>
+            <strong>Placement request</strong>
+            <small>
+              {placement.requestId ?? "No persisted placement request yet"}
+              {placement.attemptId ? ` · attempt ${placement.attemptId}` : ""}
+              {placement.requestSelectedNodeId
+                ? ` · selected context ${placement.requestSelectedNodeId}`
+                : ""}
+            </small>
+          </div>
+          <span>{placement.attemptId ? "Persisted" : "Waiting"}</span>
+        </li>
+        <li data-evidence-anchor="placement-exchange">
+          <span className={styles.evidenceGlyph}>03</span>
           <div>
             <strong>Manager exchange</strong>
             <small>
-              {placement.receiptId ??
-                placement.exchangeId ??
-                "No persisted manager exchange yet"}
+              {placement.exchangeId ?? "No persisted manager exchange yet"}
+              {placement.receiptId ? ` · receipt ${placement.receiptId}` : ""}
             </small>
           </div>
           <span>{placement.exchangeId ? "Persisted" : "Waiting"}</span>
         </li>
         <li data-evidence-anchor="pending-delta">
-          <span className={styles.evidenceGlyph}>03</span>
+          <span className={styles.evidenceGlyph}>04</span>
           <div>
             <strong>Placement delta</strong>
             <small>{placement.deltaId ?? "No pending delta"}</small>
@@ -1922,8 +2049,16 @@ function EvidencePanel({ model }: { model: WorkbenchViewModel }) {
             {adopted ? "Adopted" : placement.deltaId ? "Pending" : "None"}
           </span>
         </li>
+        <li data-evidence-anchor="placement-base-revision">
+          <span className={styles.evidenceGlyph}>05</span>
+          <div>
+            <strong>Placement base</strong>
+            <small>{placement.baseRevisionId ?? "No placement base yet"}</small>
+          </div>
+          <span>{placement.baseRevisionId ? "Pinned" : "Waiting"}</span>
+        </li>
         <li data-evidence-anchor="canonical-head">
-          <span className={styles.evidenceGlyph}>04</span>
+          <span className={styles.evidenceGlyph}>06</span>
           <div>
             <strong>Canonical head</strong>
             <small>{model.revision}</small>
@@ -1988,6 +2123,7 @@ interface CommitPanelProps {
   mutationsDisabled: boolean;
   onAccept: () => void;
   onRetry: () => void;
+  retryDisabled: boolean;
 }
 
 function CommitPanel({
@@ -1997,6 +2133,7 @@ function CommitPanel({
   mutationsDisabled,
   onAccept,
   onRetry,
+  retryDisabled,
 }: CommitPanelProps) {
   return (
     <section
@@ -2026,7 +2163,7 @@ function CommitPanel({
             <button
               aria-describedby={mutationAccessDescriptionId}
               className={styles.retryButton}
-              disabled={busy || mutationsDisabled}
+              disabled={busy || retryDisabled}
               onClick={onRetry}
               type="button"
             >
@@ -2060,6 +2197,7 @@ interface WorkPanelProps {
   work: WorkSurface;
   busy: boolean;
   mutationAccessDescriptionId?: string;
+  mutationAccess?: WorldstateWorkbenchMutationAccess;
   mutationsDisabled: boolean;
   onPrepare: () => void;
   onAuthorize: () => void;
@@ -2086,6 +2224,7 @@ export function WorkPanel({
   busy,
   mutationAccessDescriptionId,
   mutationsDisabled,
+  mutationAccess = mutationsDisabled ? "presentation-only" : "enabled",
   onPrepare,
   onAuthorize,
   onValidate,
@@ -2219,7 +2358,7 @@ export function WorkPanel({
       aria-labelledby="work-heading"
       className={styles.workRegion}
       data-morphic-region="work"
-      data-mutation-access={mutationsDisabled ? "presentation-only" : "enabled"}
+      data-mutation-access={mutationAccess}
       data-state={work.state}
       data-state-family="work"
       data-state-surface={workStateSurface(work.state)}

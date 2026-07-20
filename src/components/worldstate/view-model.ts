@@ -1071,10 +1071,15 @@ function blankPlacement(
     sourceId: null,
     sourceText: null,
     sourceCapturedAt: null,
+    requestId: null,
+    requestSelectedNodeId: null,
+    attemptId: null,
+    baseRevisionId: null,
     deltaId: null,
     candidateId: null,
     exchangeId: null,
     receiptId: null,
+    locationTargetNodeId: null,
     locationLabel: null,
     breadcrumb: [],
     proposedKind: null,
@@ -1127,6 +1132,14 @@ function buildPlacementSurface(input: {
 }): { placement: PlacementSurface; projection?: DeltaProjection } {
   const managerLabel = managerLabelFromRuntime(input.runtime);
   const operationSourceId = input.operation?.sourceId ?? null;
+  const exactRequest =
+    input.attempt?.attempt.request ?? input.exchange?.exchange.request ?? null;
+  const requestEvidence = {
+    requestId: exactRequest?.requestId ?? null,
+    requestSelectedNodeId: exactRequest?.projection.selectedNodeId ?? null,
+    attemptId: input.attempt?.event.payload.source.id ?? null,
+    baseRevisionId: exactRequest?.baseRevisionId ?? null,
+  };
   const activeFailure =
     input.failure &&
     (!input.exchange || input.failure.index > input.exchange.index)
@@ -1146,6 +1159,7 @@ function buildPlacementSurface(input: {
     return {
       placement: {
         ...placement,
+        ...requestEvidence,
         sourceId: source?.visibility === "shared" ? source.id : null,
         sourceText: source?.visibility === "shared" ? source.content : null,
         sourceCapturedAt:
@@ -1171,6 +1185,7 @@ function buildPlacementSurface(input: {
             ? "The persisted source can be retried; no semantic commit is available."
             : "The placement failure must be resolved before semantic commit.",
         ),
+        ...requestEvidence,
         sourceId: source?.visibility === "shared" ? source.id : null,
         sourceText: source?.visibility === "shared" ? source.content : null,
         sourceCapturedAt:
@@ -1198,6 +1213,7 @@ function buildPlacementSurface(input: {
             managerLabel,
             "The durable placement request can be retried; no semantic commit is available.",
           ),
+          ...requestEvidence,
           sourceId,
           sourceText:
             source?.visibility === "shared"
@@ -1224,6 +1240,7 @@ function buildPlacementSurface(input: {
     return {
       placement: {
         ...placement,
+        ...requestEvidence,
         sourceId: source?.visibility === "shared" ? source.id : null,
         sourceText: source?.visibility === "shared" ? source.content : null,
         sourceCapturedAt:
@@ -1249,6 +1266,7 @@ function buildPlacementSurface(input: {
             ? "The persisted source can be retried; no semantic commit is available."
             : "The placement failure must be resolved before semantic commit.",
         ),
+        ...requestEvidence,
         sourceId,
         sourceText:
           source?.visibility === "shared"
@@ -1273,6 +1291,7 @@ function buildPlacementSurface(input: {
     "Answer the manager clarification before semantic commit.",
   );
   const receiptFields = {
+    ...requestEvidence,
     sourceId,
     sourceText:
       source?.visibility === "shared"
@@ -1283,6 +1302,7 @@ function buildPlacementSurface(input: {
     candidateId: receipt.proposed.nodeId,
     exchangeId: input.exchange.event.payload.source.id,
     receiptId: receipt.receiptId,
+    locationTargetNodeId: receipt.location.targetNodeId,
     locationLabel: receipt.location.label,
     breadcrumb: [...receipt.location.breadcrumb],
     proposedKind: receipt.proposed.kind,

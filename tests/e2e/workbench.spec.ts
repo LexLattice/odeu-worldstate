@@ -93,7 +93,7 @@ test("persists capture and placement before one semantic commit, then reloads ex
   await expect(accept).toBeEnabled();
   await expect(root).toHaveAttribute("data-worldstate-revision", initialRevision as string);
   await expect(page.getByText(SOURCE, { exact: false })).toBeVisible();
-  await expect(page.getByText("Suggested · no change yet")).toBeVisible();
+  await expect(page.getByText("Suggested · canonical unchanged")).toBeVisible();
   await expect(
     page.getByText(/Adopt a placement before preparing a bounded agent brief/i),
   ).toBeVisible();
@@ -103,12 +103,14 @@ test("persists capture and placement before one semantic commit, then reloads ex
   await expect(page.getByRole("button", { name: "Prepare agent brief" })).toBeEnabled();
   const adoptedRevision = await root.getAttribute("data-worldstate-revision");
   const adoptedSelectedObject = await root.getAttribute("data-selected-object-id");
-  const adoptedReceipt = await page
+  const adoptedExchangeReceipt = await page
     .locator("[data-evidence-anchor='placement-exchange'] small")
     .textContent();
   expect(adoptedRevision).not.toBe(initialRevision);
   expect(adoptedSelectedObject).toBeTruthy();
-  expect(adoptedReceipt).toMatch(/^receipt-/);
+  expect(adoptedExchangeReceipt).toMatch(
+    /^source-placement-exchange:.* · receipt receipt-/,
+  );
 
   await reopenWorkbench(page);
   await expect(page.getByRole("button", { name: "Placement adopted" })).toBeDisabled();
@@ -119,7 +121,7 @@ test("persists capture and placement before one semantic commit, then reloads ex
   );
   await expect(
     page.locator("[data-evidence-anchor='placement-exchange'] small"),
-  ).toHaveText(adoptedReceipt as string);
+  ).toHaveText(adoptedExchangeReceipt as string);
   await expect(page.getByText(SOURCE, { exact: false })).toBeVisible();
   await expect(
     page
@@ -135,6 +137,9 @@ test("stages, validates, reconciles, and explicitly integrates one replay result
   const root = page.locator("[data-morphic-root='worldstate-workbench']");
   await page.getByRole("button", { name: "Capture & place" }).click();
   await page.getByRole("button", { name: "Adopt this placement" }).click();
+  await expect(
+    page.getByRole("button", { name: "Placement adopted" }),
+  ).toBeDisabled();
   const revisionBeforeDelegation = await root.getAttribute(
     "data-worldstate-revision",
   );
