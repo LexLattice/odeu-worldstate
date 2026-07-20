@@ -375,6 +375,12 @@ cover the implemented foundation. Passing tests establish contract behavior in t
 repository; they do not turn fixture evidence or model reports into verified real-world
 outcomes.
 
+Responsive browser checks distinguish first-order containment (regions, lanes, panels,
+and primary objects remain within the workbench and viewport) from second-order
+perceptual integrity (their visible text wraps or follows an explicit overflow policy).
+The reusable geometry scanner exercises widths from 320 through 1440 pixels in idle,
+replay, validation, reconciliation, integration, and semantic-onboarding states.
+
 ## License
 
 See [LICENSE](LICENSE).

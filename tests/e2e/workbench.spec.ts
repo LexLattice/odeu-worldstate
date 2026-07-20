@@ -2,6 +2,11 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 import { HOME_MOVE_REPLAY_IDENTITY } from "../../src/adapters/replay-evidence/bundle";
+import {
+  expectLayoutConformance,
+  expectLayoutConformanceAtWidths,
+  RESPONSIVE_LAYOUT_WIDTHS,
+} from "./layout-conformance";
 
 const SOURCE =
   "Ask Codex to add a simple moving-cost comparison tool to my relocation project.";
@@ -133,6 +138,7 @@ test("persists capture and placement before one semantic commit, then reloads ex
 test("stages, validates, reconciles, and explicitly integrates one replay result", async ({
   page,
 }) => {
+  test.slow();
   await openWorkbench(page);
   const root = page.locator("[data-morphic-root='worldstate-workbench']");
   await page.getByRole("button", { name: "Capture & place" }).click();
@@ -157,6 +163,12 @@ test("stages, validates, reconciles, and explicitly integrates one replay result
     "data-worldstate-revision",
     revisionBeforeDelegation as string,
   );
+  await expectLayoutConformanceAtWidths(
+    page,
+    root,
+    RESPONSIVE_LAYOUT_WIDTHS,
+    "prepared brief",
+  );
 
   await page.getByRole("button", { name: "Authorize fixture replay" }).click();
 
@@ -180,6 +192,12 @@ test("stages, validates, reconciles, and explicitly integrates one replay result
   await expect(root).toHaveAttribute(
     "data-worldstate-revision",
     revisionBeforeDelegation as string,
+  );
+  await expectLayoutConformanceAtWidths(
+    page,
+    root,
+    RESPONSIVE_LAYOUT_WIDTHS,
+    "returned fixture replay",
   );
   const replayEventCount = await persistedLedgerEventCount(page);
   const validate = page.getByRole("button", {
@@ -252,6 +270,12 @@ test("stages, validates, reconciles, and explicitly integrates one replay result
   expect(
     await persistedLedgerEventTypeCount(page, "evidence.validation_recorded"),
   ).toBe(1);
+  await expectLayoutConformanceAtWidths(
+    page,
+    root,
+    RESPONSIVE_LAYOUT_WIDTHS,
+    "independent validation",
+  );
   const validatedEventCount = await persistedLedgerEventCount(page);
   const proposalCountBeforeReconciliation =
     await persistedLedgerEventTypeCount(page, "delta.proposed");
@@ -307,6 +331,12 @@ test("stages, validates, reconciles, and explicitly integrates one replay result
   expect(await persistedLedgerEventCount(page)).toBe(validatedEventCount + 2);
   expect(await persistedLedgerEventTypeCount(page, "delta.proposed")).toBe(
     proposalCountBeforeReconciliation + 1,
+  );
+  await expectLayoutConformanceAtWidths(
+    page,
+    root,
+    RESPONSIVE_LAYOUT_WIDTHS,
+    "reconciliation candidate",
   );
   const proposedEventCount = await persistedLedgerEventCount(page);
 
@@ -370,6 +400,12 @@ test("stages, validates, reconciles, and explicitly integrates one replay result
   expect(await persistedLedgerEventCount(page)).toBe(proposedEventCount + 1);
   expect(await persistedLedgerEventTypeCount(page, "delta.accepted")).toBe(
     acceptanceCountBeforeIntegration + 1,
+  );
+  await expectLayoutConformanceAtWidths(
+    page,
+    root,
+    RESPONSIVE_LAYOUT_WIDTHS,
+    "integrated result",
   );
   const integratedEventCount = await persistedLedgerEventCount(page);
 
@@ -458,7 +494,7 @@ test("shows one dynamic candidate in outline, map, timeline, and focus without l
   }
 });
 
-test("keeps runtime truth and evidence-before-commit visible on a narrow screen", async ({
+test("keeps runtime truth and evidence-before-commit conformant across responsive widths", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -492,6 +528,12 @@ test("keeps runtime truth and evidence-before-commit visible on a narrow screen"
     () => document.documentElement.scrollWidth - window.innerWidth,
   );
   expect(horizontalOverflow).toBeLessThanOrEqual(1);
+  await expectLayoutConformanceAtWidths(
+    page,
+    root,
+    RESPONSIVE_LAYOUT_WIDTHS,
+    "idle Workbench",
+  );
 });
 
 test("requires explicit confirmation and leaves the sandbox reusable after reset", async ({
@@ -513,9 +555,15 @@ test("requires explicit confirmation and leaves the sandbox reusable after reset
 
 test("has no automatically detectable accessibility violations", async ({ page }) => {
   await openWorkbench(page);
+  const root = page.locator("[data-morphic-root='worldstate-workbench']");
+  const skipLink = page.getByRole("link", {
+    name: "Skip to project projection",
+  });
   await expect(page.getByRole("button", { name: "Capture & place" })).toBeVisible();
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("link", { name: "Skip to project projection" })).toBeFocused();
+  await expect(skipLink).toBeFocused();
+  await expect(skipLink).toBeInViewport({ ratio: 1 });
+  await expectLayoutConformance(root, "focused skip link");
   await page.keyboard.press("Enter");
   await expect(page.locator("#primary-projection")).toBeFocused();
   const results = await new AxeBuilder({ page })
