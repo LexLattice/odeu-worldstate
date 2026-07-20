@@ -79,7 +79,8 @@ export async function inspectLayoutConformance(
     const overflowPolicy = (element: Element): string =>
       element
         .closest<HTMLElement>("[data-overflow-policy]")
-        ?.dataset.overflowPolicy?.trim() || "wrap";
+        ?.dataset.overflowPolicy?.trim()
+        .toLowerCase() || "wrap";
 
     const firstOrderElements = [
       rootElement,
@@ -125,10 +126,7 @@ export async function inspectLayoutConformance(
               childRect.left < rect.left - tolerance ||
               childRect.right > rect.right + tolerance,
           )
-          .sort(
-            (left, right) =>
-              right.rect.right - rect.right - (left.rect.right - rect.right),
-          )[0];
+          .sort((left, right) => right.rect.right - left.rect.right)[0];
         record({
           kind: "first-order-content-overflow",
           target,
@@ -160,7 +158,7 @@ export async function inspectLayoutConformance(
       const policy = overflowPolicy(parent);
       if (policy === "truncate") {
         const policyElement = parent.closest<HTMLElement>(
-          "[data-overflow-policy='truncate']",
+          "[data-overflow-policy]",
         );
         const fullLabel = policyElement?.getAttribute("aria-label")?.trim();
         const text = textNode.textContent?.trim().replace(/\s+/g, " ") ?? "";
@@ -178,7 +176,7 @@ export async function inspectLayoutConformance(
       if (["scroll", "focus-expand"].includes(policy)) continue;
       if (
         policy === "focus-reveal" &&
-        !parent.closest<HTMLElement>("[data-overflow-policy='focus-reveal']")
+        !parent.closest<HTMLElement>("[data-overflow-policy]")
           ?.matches(":focus-within")
       ) {
         continue;

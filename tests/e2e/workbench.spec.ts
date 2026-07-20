@@ -556,9 +556,13 @@ test("requires explicit confirmation and leaves the sandbox reusable after reset
 test("has no automatically detectable accessibility violations", async ({ page }) => {
   await openWorkbench(page);
   const root = page.locator("[data-morphic-root='worldstate-workbench']");
+  const skipLink = page.getByRole("link", {
+    name: "Skip to project projection",
+  });
   await expect(page.getByRole("button", { name: "Capture & place" })).toBeVisible();
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("link", { name: "Skip to project projection" })).toBeFocused();
+  await expect(skipLink).toBeFocused();
+  await expect(skipLink).toBeInViewport({ ratio: 1 });
   await expectLayoutConformance(root, "focused skip link");
   await page.keyboard.press("Enter");
   await expect(page.locator("#primary-projection")).toBeFocused();

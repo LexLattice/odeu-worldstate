@@ -69,7 +69,7 @@ test("detects second-order text clipped inside a visible first-order box", async
 test("permits explicitly classified auxiliary truncation", async ({ page }) => {
   await page.setContent(`
     <main data-morphic-root="test-root" style="width: 240px">
-      <span data-layout-object="primary" data-overflow-policy="truncate"
+      <span data-layout-object="primary" data-overflow-policy=" TrUnCaTe "
         aria-label="Auxiliary diagnostic identifier abcdefghijklmnopqrstuvwxyz"
         style="display: block; width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
         Auxiliary diagnostic identifier abcdefghijklmnopqrstuvwxyz
@@ -98,5 +98,28 @@ test("rejects truncation without a full accessible label", async ({ page }) => {
   );
   expect(violations.map(({ kind }) => kind)).toContain(
     "truncate-without-full-label",
+  );
+});
+
+test("normalizes focus-reveal policy ownership and inspects it while focused", async ({
+  page,
+}) => {
+  await page.setContent(`
+    <main data-morphic-root="test-root" style="width: 240px; overflow: hidden">
+      <a href="#target" data-overflow-policy=" Focus-Reveal "
+        style="display: block; transform: translateY(-200%)">
+        Skip to target
+      </a>
+      <div id="target">Target</div>
+    </main>
+  `);
+
+  const root = page.locator("[data-morphic-root='test-root']");
+  await expectLayoutConformance(root, "unfocused focus-reveal fixture");
+
+  await page.getByRole("link", { name: "Skip to target" }).focus();
+  const violations = await inspectLayoutConformance(root);
+  expect(violations.map(({ kind }) => kind)).toContain(
+    "second-order-out-of-bounds",
   );
 });
