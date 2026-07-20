@@ -359,7 +359,7 @@ test("interactive guidance advances only after the user makes each presentation 
     page.getByRole("button", { name: "Capture & place" }),
   ).toBeDisabled();
   await expect(
-    page.getByText(/Finish or skip the opening guide before saving this source/i),
+    page.getByText(/Source capture is unavailable in this guide posture/i),
   ).toBeVisible();
   await page.getByRole("button", { name: "Finish opening" }).click();
 
@@ -623,6 +623,239 @@ test("guided placement persists one exact provisional lineage and waits for a se
   );
   expect((await persistedLedgerSummary(page)).acceptedCount).toBe(
     before.acceptedCount,
+  );
+});
+
+test("semantic adoption preserves one candidate across all views and advances exactly one human revision", async ({
+  page,
+}) => {
+  await completeOpening(page, "Watch only");
+  const onboarding = onboardingRoot(page);
+  const workbench = workbenchRoot(page);
+  const initialRevision = await workbench.getAttribute(
+    "data-worldstate-revision",
+  );
+  await startSourcePlacementGuide(page, "Watch only");
+  await page.getByRole("button", { name: "Capture & place" }).click();
+  await page.getByRole("button", { name: "Review placement" }).click();
+  await page
+    .getByRole("button", { name: "Finish source chapter" })
+    .click();
+
+  const beforeAdoption = await persistedLedgerSummary(page);
+  const candidateId = await workbench.getAttribute("data-selected-object-id");
+  expect(candidateId).toMatch(/^candidate-/);
+  await page
+    .getByRole("button", { name: "Continue to adoption review" })
+    .click();
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-chapter",
+    "semantic-adoption",
+  );
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "review-outline",
+  );
+  await expect(workbench).toHaveAttribute(
+    "data-mutation-access",
+    "presentation-only",
+  );
+  await expect(workbench).toHaveAttribute(
+    "data-selected-object-id",
+    candidateId as string,
+  );
+  await expect(workbench).toHaveAttribute("data-view", "outline");
+  expect(await persistedLedgerSummary(page)).toEqual(beforeAdoption);
+
+  const continueButton = page.getByRole("button", {
+    name: "Continue",
+    exact: true,
+  });
+  await expect(continueButton).toBeEnabled();
+  await continueButton.click();
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "review-map",
+  );
+  await expect(workbench).toHaveAttribute("data-view", "map");
+  await expect(workbench).toHaveAttribute(
+    "data-selected-object-id",
+    candidateId as string,
+  );
+  expect(await persistedLedgerSummary(page)).toEqual(beforeAdoption);
+
+  await expect(continueButton).toBeEnabled();
+  await continueButton.click();
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "review-timeline",
+  );
+  await expect(workbench).toHaveAttribute("data-view", "timeline");
+  await expect(workbench).toHaveAttribute(
+    "data-selected-object-id",
+    candidateId as string,
+  );
+
+  await expect(continueButton).toBeEnabled();
+  await continueButton.click();
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "review-focus",
+  );
+  await expect(workbench).toHaveAttribute("data-view", "focus");
+  await expect(workbench).toHaveAttribute(
+    "data-selected-object-id",
+    candidateId as string,
+  );
+
+  const reviewAccessibility = await new AxeBuilder({ page })
+    .include("[data-morphic-root='onboarding-experience']")
+    .analyze();
+  expect(reviewAccessibility.violations).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+
+  await expect(continueButton).toBeEnabled();
+  await continueButton.click();
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "adopt-placement",
+  );
+  await expect(workbench).toHaveAttribute(
+    "data-mutation-access",
+    "guided-adoption",
+  );
+  await expect(page.getByText("Guided semantic adoption")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Capture & place" }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reset sandbox" })).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Adopt this placement" }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Waiting for adoption" }),
+  ).toBeDisabled();
+
+  await page.getByRole("button", { name: "Adopt this placement" }).click();
+  await expect(
+    page.getByRole("button", { name: "Placement adopted" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Finish adoption chapter" }),
+  ).toBeEnabled();
+  const acceptedRevision = await workbench.getAttribute(
+    "data-worldstate-revision",
+  );
+  expect(acceptedRevision).not.toBe(initialRevision);
+
+  const afterAdoption = await persistedLedgerSummary(page);
+  expect(afterAdoption.acceptedCount).toBe(beforeAdoption.acceptedCount + 1);
+  expect(afterAdoption.briefCount).toBe(beforeAdoption.briefCount);
+  expect(afterAdoption.runCount).toBe(beforeAdoption.runCount);
+  expect(afterAdoption.closureCount).toBe(beforeAdoption.closureCount);
+  expect(afterAdoption.humanSourceIds).toEqual(beforeAdoption.humanSourceIds);
+  expect(afterAdoption.placementAttemptIds).toEqual(
+    beforeAdoption.placementAttemptIds,
+  );
+  expect(afterAdoption.placementExchangeIds).toEqual(
+    beforeAdoption.placementExchangeIds,
+  );
+
+  await page
+    .getByRole("button", { name: "Finish adoption chapter" })
+    .click();
+  await expect(onboarding).toHaveAttribute("data-onboarding-phase", "complete");
+  await expect(
+    page.getByRole("heading", {
+      name: "Semantic update adopted · agent authority remains separate",
+    }),
+  ).toBeFocused();
+  await expect(
+    page.locator("[data-completion-kind='semantic-adoption']"),
+  ).toHaveAttribute("data-state-surface", "authoritative-status-surface");
+  await expect(workbench).toHaveAttribute(
+    "data-mutation-access",
+    "guided-adoption",
+  );
+  await expect(
+    page.getByText("Guided semantic adoption complete"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Prepare agent brief" }),
+  ).toBeDisabled();
+
+  await page.getByRole("button", { name: "Close guide" }).click();
+  await expect(workbench).toHaveAttribute("data-mutation-access", "enabled");
+  await expect(
+    page.getByRole("button", { name: "Prepare agent brief" }),
+  ).toBeEnabled();
+
+  await page.reload();
+  await page.getByRole("button", { name: "Skip", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Placement adopted" }),
+  ).toBeDisabled();
+  await expect(workbenchRoot(page)).toHaveAttribute(
+    "data-worldstate-revision",
+    acceptedRevision as string,
+  );
+  expect(await persistedLedgerSummary(page)).toEqual(afterAdoption);
+});
+
+test("interactive semantic review blocks selection drift without mutating the pending placement", async ({
+  page,
+}) => {
+  await completeOpening(page, "Interactive");
+  const onboarding = onboardingRoot(page);
+  const workbench = workbenchRoot(page);
+  await startSourcePlacementGuide(page, "Interactive");
+  await page.getByRole("button", { name: "Capture & place" }).click();
+  await page.getByRole("button", { name: "Review placement" }).click();
+  await page
+    .getByRole("button", { name: "Finish source chapter" })
+    .click();
+  const pending = await persistedLedgerSummary(page);
+  const candidateId = await workbench.getAttribute("data-selected-object-id");
+  expect(candidateId).toMatch(/^candidate-/);
+  await page
+    .getByRole("button", { name: "Continue to adoption review" })
+    .click();
+
+  await expect(onboarding).toHaveAttribute(
+    "data-onboarding-step",
+    "review-outline",
+  );
+  const continueButton = page.getByRole("button", {
+    name: "Continue",
+    exact: true,
+  });
+  await expect(continueButton).toBeEnabled();
+  await workbench
+    .locator(
+      `[role='treeitem'][data-worldstate-id='${HOME_MOVE_IDS.budget}'] > button`,
+    )
+    .click();
+  await expect(workbench).toHaveAttribute(
+    "data-selected-object-id",
+    HOME_MOVE_IDS.budget,
+  );
+  await expect(continueButton).toBeDisabled();
+  expect(await persistedLedgerSummary(page)).toEqual(pending);
+
+  await workbench
+    .locator(
+      `[role='treeitem'][data-worldstate-id='${candidateId}'] > button`,
+    )
+    .click();
+  await expect(continueButton).toBeEnabled();
+  await page.getByRole("button", { name: "Exit adoption guide" }).click();
+  await expect(workbench).toHaveAttribute("data-mutation-access", "enabled");
+  expect((await persistedLedgerSummary(page)).acceptedCount).toBe(
+    pending.acceptedCount,
   );
 });
 

@@ -31,6 +31,7 @@ export interface WorldstatePlacementObservation {
   readonly candidateId: string | null;
   readonly locationTargetNodeId: string | null;
   readonly baseRevisionId: string | null;
+  readonly acceptedRevisionId: string | null;
   readonly headRevisionId: string | null;
   readonly managerMode: WorldstatePlacementManagerMode;
   readonly managerLabel: string;
@@ -63,6 +64,7 @@ export function deriveWorldstatePlacementObservation(
     candidateId: input.placement.candidateId,
     locationTargetNodeId: input.placement.locationTargetNodeId,
     baseRevisionId: input.placement.baseRevisionId,
+    acceptedRevisionId: input.placement.acceptedRevisionId,
     headRevisionId: input.headRevisionId,
     managerMode: input.managerMode,
     managerLabel: input.placement.managerLabel,
@@ -92,6 +94,7 @@ export function worldstatePlacementObservationEqual(
     left.candidateId === right.candidateId &&
     left.locationTargetNodeId === right.locationTargetNodeId &&
     left.baseRevisionId === right.baseRevisionId &&
+    left.acceptedRevisionId === right.acceptedRevisionId &&
     left.headRevisionId === right.headRevisionId &&
     left.managerMode === right.managerMode &&
     left.managerLabel === right.managerLabel &&

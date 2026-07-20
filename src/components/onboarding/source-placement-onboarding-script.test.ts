@@ -38,6 +38,7 @@ const reviewablePlacement: WorldstatePlacementObservation = {
   candidateId: HOME_MOVE_IDS.compareQuotes,
   locationTargetNodeId: HOME_MOVE_IDS.budget,
   baseRevisionId: BASE_REVISION_ID,
+  acceptedRevisionId: null,
   headRevisionId: BASE_REVISION_ID,
   managerMode: "fixture",
   managerLabel: "Deterministic fixture manager",

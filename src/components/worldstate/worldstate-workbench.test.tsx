@@ -463,7 +463,7 @@ describe("WorldstateWorkbench", () => {
     expect(resetButton).toBeDisabled();
     expect(sourceInput).toBeEnabled();
     expect(sourceInput).toHaveAccessibleDescription(
-      /Finish or skip the opening guide before saving this source/i,
+      /Source capture is unavailable in this guide posture/i,
     );
     expect(captureForm).not.toBeNull();
     fireEvent.submit(captureForm as HTMLFormElement);
@@ -481,7 +481,7 @@ describe("WorldstateWorkbench", () => {
     expect(captureButton).toBeEnabled();
     expect(resetButton).toBeEnabled();
     expect(
-      screen.queryByText(/Finish or skip the opening guide before saving/i),
+      screen.queryByText(/Source capture is unavailable in this guide posture/i),
     ).not.toBeInTheDocument();
   });
 
@@ -590,6 +590,100 @@ describe("WorldstateWorkbench", () => {
     expect(resetSandbox).not.toHaveBeenCalled();
     expect(container.querySelector("[data-mutation-access='guided-capture']"))
       .toBeInTheDocument();
+  });
+
+  it("denies capture and reset at the guided-adoption handler boundary", async () => {
+    const { session } = sessionHarness();
+    await session.initialize();
+    const captureAndPlace = vi.spyOn(session, "captureAndPlace");
+    const resetSandbox = vi.spyOn(session, "resetSandbox");
+    const { container } = render(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        mutationAccess="guided-adoption"
+        session={session}
+      />,
+    );
+
+    const captureButton = screen.getByRole("button", {
+      name: "Capture & place",
+    });
+    const resetButton = screen.getByRole("button", { name: "Reset sandbox" });
+    const captureForm = captureButton.closest("form");
+    expect(captureButton).toBeDisabled();
+    expect(resetButton).toBeDisabled();
+    expect(screen.getByText("Guided semantic adoption")).toBeVisible();
+    expect(
+      container.querySelector("[data-mutation-access='guided-adoption']"),
+    ).toBeInTheDocument();
+
+    captureButton.removeAttribute("disabled");
+    fireEvent.submit(captureForm as HTMLFormElement);
+    resetButton.removeAttribute("disabled");
+    fireEvent.click(resetButton);
+    expect(captureAndPlace).not.toHaveBeenCalled();
+    expect(resetSandbox).not.toHaveBeenCalled();
+  });
+
+  it("allows exactly the human semantic commit while later guided-adoption actions remain locked", async () => {
+    const user = userEvent.setup();
+    const { session } = sessionHarness();
+    await session.initialize();
+    await session.captureAndPlace(SOURCE, HOME_MOVE_IDS.budget);
+    const acceptActivePlacement = vi.spyOn(session, "acceptActivePlacement");
+    const prepareAgentBrief = vi.spyOn(session, "prepareActiveAgentBrief");
+    const resetSandbox = vi.spyOn(session, "resetSandbox");
+    const before = session.getSnapshot();
+    const beforeHead = before.state?.canonical.head.id;
+    const beforeAcceptedCount =
+      before.ledger?.events.filter((event) => event.type === "delta.accepted")
+        .length ?? 0;
+    const { container } = render(
+      <WorldstateWorkbench
+        autoInitialize={false}
+        mutationAccess="guided-adoption"
+        session={session}
+      />,
+    );
+
+    const adoptButton = await screen.findByRole("button", {
+      name: "Adopt this placement",
+    });
+    expect(adoptButton).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reset sandbox" })).toBeDisabled();
+    expect(
+      container.querySelector("[data-morphic-lane='guided-adoption-access']"),
+    ).toHaveTextContent("Only the exact human semantic commit is available");
+
+    await user.click(adoptButton);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Placement adopted" }),
+      ).toBeDisabled(),
+    );
+
+    const after = session.getSnapshot();
+    expect(acceptActivePlacement).toHaveBeenCalledOnce();
+    expect(after.state?.canonical.head.id).not.toBe(beforeHead);
+    expect(
+      after.ledger?.events.filter((event) => event.type === "delta.accepted"),
+    ).toHaveLength(beforeAcceptedCount + 1);
+    expect(after.activeBriefId).toBeNull();
+    expect(screen.getByText("Guided semantic adoption complete")).toBeVisible();
+
+    const prepareButton = screen.getByRole("button", {
+      name: "Prepare agent brief",
+    });
+    const resetButton = screen.getByRole("button", { name: "Reset sandbox" });
+    expect(prepareButton).toBeDisabled();
+    expect(resetButton).toBeDisabled();
+    prepareButton.removeAttribute("disabled");
+    fireEvent.click(prepareButton);
+    resetButton.removeAttribute("disabled");
+    fireEvent.click(resetButton);
+    expect(prepareAgentBrief).not.toHaveBeenCalled();
+    expect(resetSandbox).not.toHaveBeenCalled();
+    expect(session.getSnapshot().activeBriefId).toBeNull();
   });
 
   it("preserves ready domain posture while explaining the presentation-only action lock", async () => {

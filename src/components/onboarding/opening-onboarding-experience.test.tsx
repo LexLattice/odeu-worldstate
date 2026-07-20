@@ -42,7 +42,8 @@ interface MockWorkbenchProps {
   readonly mutationAccess?:
     | "enabled"
     | "presentation-only"
-    | "guided-capture";
+    | "guided-capture"
+    | "guided-adoption";
   readonly onOperationBusyChange?: (busy: boolean) => void;
   readonly onPlacementObservationChange?: (
     observation: WorldstatePlacementObservation,
@@ -83,6 +84,7 @@ const IDLE_PLACEMENT: WorldstatePlacementObservation = {
   candidateId: null,
   locationTargetNodeId: null,
   baseRevisionId: null,
+  acceptedRevisionId: null,
   headRevisionId: "revision-home-move-seed",
   managerMode: "fixture",
   managerLabel: "Fixture placement manager",
@@ -104,6 +106,14 @@ const REVIEWABLE_BUDGET_PLACEMENT: WorldstatePlacementObservation = {
   locationTargetNodeId: "node-area-budget",
   baseRevisionId: "revision-home-move-seed",
   canAccept: true,
+};
+
+const ADOPTED_BUDGET_PLACEMENT: WorldstatePlacementObservation = {
+  ...REVIEWABLE_BUDGET_PLACEMENT,
+  state: "adopted",
+  acceptedRevisionId: "revision-guided-adoption",
+  headRevisionId: "revision-guided-adoption",
+  canAccept: false,
 };
 
 function workbenchProps(): MockWorkbenchProps {
@@ -410,6 +420,148 @@ describe("OpeningOnboardingExperience", () => {
       }),
     ).toHaveFocus();
     expect(workbenchProps().mutationAccess).toBe("guided-capture");
+
+    await user.click(screen.getByRole("button", { name: "Close guide" }));
+    expect(workbenchProps().mutationAccess).toBe("enabled");
+    expect(screen.getByTestId("worldstate-workbench")).toHaveFocus();
+  });
+
+  it("reviews one candidate across four views before enabling one explicit semantic commit", async () => {
+    const user = userEvent.setup();
+    render(<OpeningOnboardingExperience />);
+
+    await user.click(screen.getByRole("button", { name: /Watch only/i }));
+    reportPlacement(IDLE_PLACEMENT);
+    reportPresentation({
+      ...OTHER_PRESENTATION,
+      projectId: "project-home-move",
+      projectLabel: "Plan our home move",
+    });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    reportPresentation({
+      ...OTHER_PRESENTATION,
+      projectId: "project-home-move",
+      projectLabel: "Plan our home move",
+      view: "outline",
+    });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    reportPresentation(COMPLETE_PRESENTATION);
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Finish opening" }));
+    await user.click(
+      screen.getByRole("button", { name: "Start guided placement" }),
+    );
+    reportPresentation({
+      ...COMPLETE_PRESENTATION,
+      selectedObjectId: "node-area-budget",
+      selectedObjectLabel: "Budget",
+    });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    reportPlacement(REVIEWABLE_BUDGET_PLACEMENT);
+    await user.click(screen.getByRole("button", { name: "Review placement" }));
+    await user.click(
+      screen.getByRole("button", { name: "Finish source chapter" }),
+    );
+
+    const startAdoption = screen.getByRole("button", {
+      name: "Continue to adoption review",
+    });
+    expect(startAdoption).toBeEnabled();
+    await user.click(startAdoption);
+
+    expect(workbenchProps().mutationAccess).toBe("presentation-only");
+    expect(
+      screen.getByRole("heading", { name: "See where the candidate belongs" }),
+    ).toHaveFocus();
+    expect(workbenchProps().presentationCommand).toEqual({
+      id: "semantic-adoption-onboarding:0:review-outline:select-candidate",
+      type: "select_object",
+      objectId: "node-guided-placement",
+    });
+
+    const candidatePresentation: WorldstatePresentationState = {
+      ...COMPLETE_PRESENTATION,
+      selectedObjectId: "node-guided-placement",
+      selectedObjectLabel: "Compare moving quotes",
+    };
+    reportPresentation(candidatePresentation);
+    expect(workbenchProps().presentationCommand).toBeUndefined();
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(workbenchProps().presentationCommand).toMatchObject({
+      type: "select_view",
+      view: "map",
+    });
+
+    reportPresentation({ ...candidatePresentation, view: "map" });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(workbenchProps().presentationCommand).toMatchObject({
+      type: "select_view",
+      view: "timeline",
+    });
+
+    reportPresentation({ ...candidatePresentation, view: "timeline" });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(workbenchProps().presentationCommand).toMatchObject({
+      type: "select_view",
+      view: "focus",
+    });
+
+    reportPresentation({ ...candidatePresentation, view: "focus" });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(workbenchProps().mutationAccess).toBe("guided-adoption");
+    expect(workbenchProps().presentationCommand).toBeUndefined();
+    expect(
+      screen.getByRole("heading", {
+        name: "Choose whether this interpretation becomes project truth",
+      }),
+    ).toHaveFocus();
+    expect(
+      screen.getByRole("button", { name: "Waiting for adoption" }),
+    ).toBeDisabled();
+
+    reportPlacement({
+      ...REVIEWABLE_BUDGET_PLACEMENT,
+      deltaId: "delta-unreviewed-placement",
+    });
+    expect(workbenchProps().mutationAccess).toBe("presentation-only");
+    expect(
+      screen.getByText(/frozen placement no longer satisfies/i),
+    ).toBeVisible();
+
+    reportPlacement(REVIEWABLE_BUDGET_PLACEMENT);
+    expect(workbenchProps().mutationAccess).toBe("guided-adoption");
+
+    reportPlacement({
+      ...REVIEWABLE_BUDGET_PLACEMENT,
+      operationState: "accepting",
+      persistenceState: "saving",
+      canAccept: false,
+    });
+    expect(
+      screen.getByText(/Saving the human semantic commit/i),
+    ).toBeVisible();
+
+    reportPlacement(ADOPTED_BUDGET_PLACEMENT);
+    const finishAdoption = screen.getByRole("button", {
+      name: "Finish adoption chapter",
+    });
+    expect(finishAdoption).toBeEnabled();
+    await user.click(finishAdoption);
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Semantic update adopted · agent authority remains separate",
+      }),
+    ).toHaveFocus();
+    expect(screen.getByText(/revision-guided-adoption/)).toBeVisible();
+    expect(workbenchProps().mutationAccess).toBe("guided-adoption");
+
+    reportPlacement({
+      ...REVIEWABLE_BUDGET_PLACEMENT,
+      deltaId: "delta-after-completion",
+    });
+    expect(workbenchProps().mutationAccess).toBe("presentation-only");
 
     await user.click(screen.getByRole("button", { name: "Close guide" }));
     expect(workbenchProps().mutationAccess).toBe("enabled");
