@@ -89,9 +89,14 @@ The transcript remains inspectable as provenance.
   exact working context, then enables only user-invoked capture and exact-source retry.
   It persists the source, request/attempt with its exact selected context, Manager
   exchange/receipt, and pending delta, keeps the canonical head unchanged, and hands
-  off a frozen reviewable receipt.
-  Semantic adoption, reset, and every agent or promotion action remain locked until
-  the guide is explicitly closed.
+  off a frozen reviewable receipt. Semantic adoption, reset, and every agent or
+  promotion action remain locked within that chapter.
+- A separate guided semantic-adoption chapter that preserves the exact provisional
+  candidate through Outline, Map, Timeline, and Focus before changing the Workbench to
+  `guided-adoption`. Only the person's exact semantic commit is then available. One
+  accepted revision is observed and frozen into the handoff while capture, retry,
+  reset, brief preparation, dispatch, validation, reconciliation, integration, and
+  promotion remain locked until the guide is explicitly closed.
 - A durable, least-context browser brief preview compiled from the latest accepted
   Task, with shared context, local private/out-of-scope omission receipts, immutable
   revision and artifact bindings, authority limits, unknowns, and evidence requirements.
@@ -162,7 +167,7 @@ creation. It is not an authorized ODEU run and cannot produce closure, candidate
 reconciliation, or promotion evidence. The application's provider-key-backed live
 route and live placement remain unobserved because neither `OPENAI_API_KEY` nor
 `CODEX_API_KEY` is configured. Remaining product work includes that end-to-end live
-route evidence, the later semantic-adoption-through-reconciliation onboarding
+route evidence, the later agent-brief-through-reconciliation onboarding
 chapters, voice capture, correction/defer/reject controls, multi-project routing, and
 Codex thread resume.
 
@@ -360,7 +365,10 @@ durable run lineage. On 2026-07-19, onboarding was extended with a separate guid
 source-placement chapter: it establishes Budget context, permits only human capture or
 exact-source retry, persists a provisional receipt and its exact lineage, and freezes
 that reviewable handoff while the canonical revision stays unchanged and all later
-authority gates remain closed.
+authority gates remain closed. On 2026-07-20, a third controller added the first
+semantic authority chapter. It proves the same provisional candidate across all four
+projections, permits only the exact human placement acceptance, observes one new
+canonical revision, and stops before brief preparation or agent authority.
 
 Unit, integration, browser-journey, responsive, and automated accessibility checks
 cover the implemented foundation. Passing tests establish contract behavior in this

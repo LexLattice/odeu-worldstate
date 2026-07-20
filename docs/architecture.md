@@ -347,6 +347,24 @@ identifiers into a reviewable handoff. The handoff is evidence for a later decis
 not semantic adoption, and closing the guide merely restores the Workbench's ordinary
 host gates.
 
+A third semantic-adoption controller may start only while that frozen handoff still
+matches the exact current reviewable placement and canonical head. It keeps the
+Workbench presentation-only while the same candidate is observed in Outline, Map,
+Timeline, and Focus. Interactive mode waits for the person's view and selection;
+watch-only may issue only the corresponding typed presentation commands. None of those
+projection steps writes the ledger.
+
+At the final decision step the Workbench changes to `guided-adoption`. That capability
+denies capture, retry, reset, brief preparation, dispatch, validation, reconciliation,
+integration, promotion, and operator authorization at their handlers. It permits only
+the person's existing `acceptActivePlacement` path, whose domain and persistence gates
+recheck the exact pending delta against the current head. The guide observes the
+result through the scalar placement projection, including the exact accepted revision;
+it never receives the session or a semantic command. Completion requires the original
+source/request/attempt/exchange/receipt/delta/candidate/target lineage, a new accepted
+revision equal to the canonical head, and no inferred agent authority. The completed
+chapter remains locked until explicit Close restores ordinary host gates.
+
 ### 4. Projection and agent boundary
 
 An agent does not receive the canonical worldstate. The projection compiler produces

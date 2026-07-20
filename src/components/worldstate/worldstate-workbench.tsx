@@ -537,7 +537,8 @@ function storeSelection(selection: string) {
 export type WorldstateWorkbenchMutationAccess =
   | "enabled"
   | "presentation-only"
-  | "guided-capture";
+  | "guided-capture"
+  | "guided-adoption";
 
 export interface WorldstateWorkbenchProps {
   initialView?: ProjectionView;
@@ -565,19 +566,30 @@ export interface WorldstateWorkbenchProps {
 
 function MutationAccessNotice({
   access,
+  adoptionComplete = false,
   id,
 }: {
   readonly access: Exclude<WorldstateWorkbenchMutationAccess, "enabled">;
+  readonly adoptionComplete?: boolean;
   readonly id: string;
 }) {
   const guidedCapture = access === "guided-capture";
+  const guidedAdoption = access === "guided-adoption";
   return (
     <div
       className={styles.mutationAccessNotice}
       data-morphic-lane={
-        guidedCapture ? "guided-capture-access" : "presentation-only-access"
+        guidedCapture
+          ? "guided-capture-access"
+          : guidedAdoption
+            ? "guided-adoption-access"
+            : "presentation-only-access"
       }
-      data-state-surface="diagnostic-status-surface"
+      data-state-surface={
+        guidedAdoption && adoptionComplete
+          ? "authoritative-status-surface"
+          : "diagnostic-status-surface"
+      }
       id={id}
       role="status"
     >
@@ -586,12 +598,20 @@ function MutationAccessNotice({
         <strong>
           {guidedCapture
             ? "Guided source placement"
-            : "Presentation-only opening"}
+            : guidedAdoption
+              ? adoptionComplete
+                ? "Guided semantic adoption complete"
+                : "Guided semantic adoption"
+              : "Presentation-only opening"}
         </strong>
         <small>
           {guidedCapture
             ? "Capture and exact placement retry are available. Semantic commit, reset, agent work, validation, reconciliation, integration, and promotion remain locked until you leave this guide."
-            : "Continue or skip the opening guide to reach guided source capture. Durable, provider, destructive, and authority-increasing actions remain locked."}
+            : guidedAdoption
+              ? adoptionComplete
+                ? "The exact semantic commit is durable. Capture, retry, reset, agent work, validation, reconciliation, integration, and promotion remain locked until you leave this guide."
+                : "Only the exact human semantic commit is available. Capture, retry, reset, agent work, validation, reconciliation, integration, and promotion remain locked until you leave this guide."
+              : "Continue or skip the opening guide to reach guided source capture. Durable, provider, destructive, and authority-increasing actions remain locked."}
         </small>
       </span>
     </div>
@@ -657,7 +677,10 @@ export function WorldstateWorkbench({
   const activeView = selectedView ?? (narrowDefault ? "focus" : "outline");
   const busy = localOperationPending || snapshot.operationState !== "idle";
   const mutationsDisabled = mutationAccess !== "enabled";
-  const captureMutationsDisabled = mutationAccess === "presentation-only";
+  const captureMutationsDisabled =
+    mutationAccess !== "enabled" && mutationAccess !== "guided-capture";
+  const semanticCommitDisabled =
+    mutationAccess !== "enabled" && mutationAccess !== "guided-adoption";
   const validatingEvidence =
     snapshot.operationState === "validating_evidence" ||
     snapshot.operationState === "persisting_validation";
@@ -1112,7 +1135,7 @@ export function WorldstateWorkbench({
   };
 
   const acceptPlacement = () => {
-    if (mutationsDisabled || busy || !model?.placement.canAccept) return;
+    if (semanticCommitDisabled || busy || !model?.placement.canAccept) return;
     const before = snapshot.state?.canonical.head.id;
     setAnnouncement("Saving the human semantic commit.");
     const operation = runTrackedOperation(() =>
@@ -1489,6 +1512,10 @@ export function WorldstateWorkbench({
             WorldstateWorkbenchMutationAccess,
             "enabled"
           >}
+          adoptionComplete={
+            mutationAccess === "guided-adoption" &&
+            model.placement.state === "adopted"
+          }
           id={mutationAccessDescriptionId}
         />
       ) : null}
@@ -1579,7 +1606,7 @@ export function WorldstateWorkbench({
             mutationAccessDescriptionId={
               mutationsDisabled ? mutationAccessDescriptionId : undefined
             }
-            mutationsDisabled={mutationsDisabled}
+            mutationsDisabled={semanticCommitDisabled}
             onAccept={acceptPlacement}
             onRetry={retryPlacement}
             placement={model.placement}
@@ -1698,8 +1725,8 @@ function SourceCapture({
         </p>
         {captureDisabled ? (
           <p className={styles.captureGate} id={sourceCaptureGateId}>
-            Finish or skip the opening guide before saving this source. Draft
-            text stays in this page until then.
+            Source capture is unavailable in this guide posture. Draft text
+            stays in this page; leave the guide to restore ordinary host gates.
           </p>
         ) : null}
       </form>

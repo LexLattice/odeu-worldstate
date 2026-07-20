@@ -78,6 +78,7 @@ export interface PlacementSurface {
   requestSelectedNodeId: string | null;
   attemptId: string | null;
   baseRevisionId: string | null;
+  acceptedRevisionId: string | null;
   deltaId: string | null;
   candidateId: string | null;
   exchangeId: string | null;

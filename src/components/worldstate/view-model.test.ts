@@ -312,6 +312,7 @@ describe("buildWorkbenchViewModel", () => {
       state: "adopted",
       canAccept: false,
       candidateId,
+      acceptedRevisionId: state.canonical.head.id,
     });
     expect(model.nodes.find((node) => node.id === candidateId)).toMatchObject({
       eyebrow: "Task · Canonical",

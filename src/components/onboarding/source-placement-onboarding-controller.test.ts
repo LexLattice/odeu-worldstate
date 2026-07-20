@@ -43,6 +43,7 @@ const idlePlacement: WorldstatePlacementObservation = {
   candidateId: null,
   locationTargetNodeId: null,
   baseRevisionId: null,
+  acceptedRevisionId: null,
   headRevisionId: BASE_REVISION_ID,
   managerMode: "unavailable",
   managerLabel: "Placement manager not observed yet",

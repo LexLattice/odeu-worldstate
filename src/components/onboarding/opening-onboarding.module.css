@@ -421,6 +421,9 @@
 .experience[data-highlight="scope"] :global([data-morphic-region="scope"]),
 .experience[data-highlight="projection"] :global([data-morphic-region="projection"]),
 .experience[data-highlight="outline"] :global(#projection-tab-outline),
+.experience[data-highlight="map"] :global(#projection-tab-map),
+.experience[data-highlight="timeline"] :global(#projection-tab-timeline),
+.experience[data-highlight="focus"] :global(#projection-tab-focus),
 .experience[data-highlight="goal"] :global([data-worldstate-id="node-goal-under-4000"]),
 .experience[data-highlight="budget"] :global([data-worldstate-id="node-area-budget"]),
 .experience[data-highlight="capture"] :global([data-onboarding-target="source-capture"]) {

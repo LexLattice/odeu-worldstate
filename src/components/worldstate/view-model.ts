@@ -1075,6 +1075,7 @@ function blankPlacement(
     requestSelectedNodeId: null,
     attemptId: null,
     baseRevisionId: null,
+    acceptedRevisionId: null,
     deltaId: null,
     candidateId: null,
     exchangeId: null,
@@ -1370,6 +1371,7 @@ function buildPlacementSurface(input: {
         ...base,
         ...receiptFields,
         state: "adopted",
+        acceptedRevisionId: acceptedRevision ?? null,
         gateReason: acceptedRevision
           ? `Already adopted in ${acceptedRevision}.`
           : "This placement has already been adopted.",

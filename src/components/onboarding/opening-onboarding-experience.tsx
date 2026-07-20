@@ -16,6 +16,18 @@ import {
 import type { OpeningOnboardingStepId } from "./opening-onboarding-script";
 import styles from "./opening-onboarding.module.css";
 import {
+  canStartSemanticAdoptionOnboarding,
+  createSemanticAdoptionOnboardingState,
+  deriveSemanticAdoptionOnboardingView,
+  reduceSemanticAdoptionOnboarding,
+  type SemanticAdoptionOnboardingAction,
+} from "./semantic-adoption-onboarding-controller";
+import {
+  adoptedSemanticPlacementObserved,
+  reviewableSemanticAdoptionObserved,
+  type SemanticAdoptionOnboardingStepId,
+} from "./semantic-adoption-onboarding-script";
+import {
   canStartSourcePlacementOnboarding,
   createSourcePlacementOnboardingState,
   deriveSourcePlacementOnboardingView,
@@ -30,6 +42,9 @@ import {
 type HighlightTarget =
   | "scope"
   | "outline"
+  | "map"
+  | "timeline"
+  | "focus"
   | "goal"
   | "budget"
   | "capture"
@@ -69,6 +84,25 @@ function highlightForOpeningStep(
       return "goal";
     case "source-capture-handoff":
       return "capture";
+    default:
+      return undefined;
+  }
+}
+
+function highlightForSemanticAdoptionStep(
+  stepId: SemanticAdoptionOnboardingStepId | undefined,
+): HighlightTarget | undefined {
+  switch (stepId) {
+    case "review-outline":
+      return "outline";
+    case "review-map":
+      return "map";
+    case "review-timeline":
+      return "timeline";
+    case "review-focus":
+      return "focus";
+    case "adopt-placement":
+      return "decision";
     default:
       return undefined;
   }
@@ -261,6 +295,9 @@ export function OpeningOnboardingExperience() {
   const [sourceOnboarding, setSourceOnboarding] = useState(
     createSourcePlacementOnboardingState,
   );
+  const [adoptionOnboarding, setAdoptionOnboarding] = useState(
+    createSemanticAdoptionOnboardingState,
+  );
   const [presentation, setPresentation] =
     useState<WorldstatePresentationState | null>(null);
   const [placement, setPlacement] =
@@ -270,6 +307,8 @@ export function OpeningOnboardingExperience() {
   const openingCompletionHeadingRef = useRef<HTMLHeadingElement>(null);
   const sourceGuideHeadingRef = useRef<HTMLHeadingElement>(null);
   const sourceCompletionHeadingRef = useRef<HTMLHeadingElement>(null);
+  const adoptionGuideHeadingRef = useRef<HTMLHeadingElement>(null);
+  const adoptionCompletionHeadingRef = useRef<HTMLHeadingElement>(null);
   const workbenchFrameRef = useRef<HTMLDivElement>(null);
   const focusReceiptOnSourceStepRef = useRef(false);
   const previousOpeningPhaseRef = useRef(onboarding.phase);
@@ -277,6 +316,9 @@ export function OpeningOnboardingExperience() {
   const previousSourcePhaseRef = useRef(sourceOnboarding.phase);
   const previousSourceStepIdRef =
     useRef<SourcePlacementOnboardingStepId | null>(null);
+  const previousAdoptionPhaseRef = useRef(adoptionOnboarding.phase);
+  const previousAdoptionStepIdRef =
+    useRef<SemanticAdoptionOnboardingStepId | null>(null);
   const openingView = useMemo(
     () => deriveOpeningOnboardingView(onboarding, presentation),
     [onboarding, presentation],
@@ -289,8 +331,17 @@ export function OpeningOnboardingExperience() {
       }),
     [placement, presentation, sourceOnboarding],
   );
+  const adoptionView = useMemo(
+    () =>
+      deriveSemanticAdoptionOnboardingView(adoptionOnboarding, {
+        placement,
+        presentation,
+      }),
+    [adoptionOnboarding, placement, presentation],
+  );
   const currentOpeningStepId = openingView.step?.id ?? null;
   const currentSourceStepId = sourceView.step?.id ?? null;
+  const currentAdoptionStepId = adoptionView.step?.id ?? null;
 
   useEffect(() => {
     const previousPhase = previousOpeningPhaseRef.current;
@@ -352,6 +403,30 @@ export function OpeningOnboardingExperience() {
     previousSourceStepIdRef.current = currentSourceStepId;
   }, [currentSourceStepId, sourceView.phase]);
 
+  useEffect(() => {
+    const previousPhase = previousAdoptionPhaseRef.current;
+    const previousStepId = previousAdoptionStepIdRef.current;
+    if (
+      adoptionView.phase === "guiding" &&
+      (previousPhase !== "guiding" ||
+        previousStepId !== currentAdoptionStepId)
+    ) {
+      adoptionGuideHeadingRef.current?.focus();
+    } else if (
+      adoptionView.phase === "complete" &&
+      previousPhase === "guiding"
+    ) {
+      adoptionCompletionHeadingRef.current?.focus();
+    } else if (
+      adoptionView.phase === "skipped" &&
+      previousPhase !== "skipped"
+    ) {
+      focusWorkbench(workbenchFrameRef.current);
+    }
+    previousAdoptionPhaseRef.current = adoptionView.phase;
+    previousAdoptionStepIdRef.current = currentAdoptionStepId;
+  }, [adoptionView.phase, currentAdoptionStepId]);
+
   const dispatchOpening = (action: OpeningOnboardingAction) => {
     setOnboarding((current) => reduceOpeningOnboarding(current, action));
   };
@@ -359,6 +434,12 @@ export function OpeningOnboardingExperience() {
   const dispatchSource = (action: SourcePlacementOnboardingAction) => {
     setSourceOnboarding((current) =>
       reduceSourcePlacementOnboarding(current, action),
+    );
+  };
+
+  const dispatchAdoption = (action: SemanticAdoptionOnboardingAction) => {
+    setAdoptionOnboarding((current) =>
+      reduceSemanticAdoptionOnboarding(current, action),
     );
   };
 
@@ -382,23 +463,38 @@ export function OpeningOnboardingExperience() {
 
   const openingStep = openingView.step;
   const sourceStep = sourceView.step;
+  const adoptionStep = adoptionView.step;
   const openingGuideActive =
     openingView.phase === "guiding" && openingStep !== null;
   const sourceGuideActive =
     sourceView.phase === "guiding" && sourceStep !== null;
+  const adoptionGuideActive =
+    adoptionView.phase === "guiding" && adoptionStep !== null;
   const sourceHasStarted = sourceView.phase !== "inactive";
   const sourceComplete = sourceView.phase === "complete";
   const sourceClosed = sourceView.phase === "skipped";
+  const adoptionHasStarted = adoptionView.phase !== "inactive";
+  const adoptionComplete = adoptionView.phase === "complete";
+  const adoptionClosed = adoptionView.phase === "skipped";
   const openingClosed = openingView.phase === "skipped";
-  const guideActive = openingGuideActive || sourceGuideActive;
+  const guideActive =
+    openingGuideActive || sourceGuideActive || adoptionGuideActive;
   const openingCompletionVisible =
     openingView.phase === "complete" && sourceView.phase === "inactive";
-  const sourceCompletionVisible = sourceComplete;
+  const sourceCompletionVisible =
+    sourceComplete && adoptionView.phase === "inactive";
+  const adoptionCompletionVisible = adoptionComplete;
   const canContinueOpening =
     openingView.canContinue && presentation !== null;
   const canStartSource =
     canStartSourcePlacementOnboarding(placement) && !workbenchBusy;
   const canContinueSource = sourceView.canContinue;
+  const canStartAdoption =
+    canStartSemanticAdoptionOnboarding({
+      placement,
+      placementHandoff: sourceView.handoff,
+    }) && !workbenchBusy;
+  const canContinueAdoption = adoptionView.canContinue;
   const sourceReviewReady =
     sourceStep?.id === "capture-source" && canContinueSource;
   const sourceRequestPending =
@@ -406,24 +502,46 @@ export function OpeningOnboardingExperience() {
     placement?.operationState === "placing" ||
     placement?.operationState === "persisting_placement";
   const workbenchMutationAccess =
-    openingClosed || sourceClosed
+    openingClosed || sourceClosed || adoptionClosed
       ? "enabled"
-      : sourceGuideActive || sourceComplete
-        ? "guided-capture"
-        : "presentation-only";
-  const activePresentationCommand = sourceGuideActive
-    ? sourceView.presentationCommand
-    : openingGuideActive
-      ? openingView.presentationCommand
-      : null;
-  const highlight: HighlightTarget | undefined = sourceComplete
-    ? "decision"
+      : adoptionComplete || adoptionStep?.id === "adopt-placement"
+        ? "guided-adoption"
+        : adoptionGuideActive
+          ? "presentation-only"
+          : sourceGuideActive || sourceComplete
+            ? "guided-capture"
+            : "presentation-only";
+  const activePresentationCommand = adoptionGuideActive
+    ? adoptionView.presentationCommand
     : sourceGuideActive
-      ? highlightForSourceStep(sourceStep?.id, sourceReviewReady)
-      : highlightForOpeningStep(openingStep?.id);
-  const activeChapter = sourceHasStarted ? "source-placement" : "opening";
-  const activePhase = sourceHasStarted ? sourceView.phase : openingView.phase;
-  const activeStep = sourceHasStarted ? sourceStep?.id : openingStep?.id;
+      ? sourceView.presentationCommand
+      : openingGuideActive
+        ? openingView.presentationCommand
+        : null;
+  const highlight: HighlightTarget | undefined = adoptionComplete
+    ? "decision"
+    : adoptionGuideActive
+      ? highlightForSemanticAdoptionStep(adoptionStep?.id)
+      : sourceComplete
+        ? "decision"
+        : sourceGuideActive
+          ? highlightForSourceStep(sourceStep?.id, sourceReviewReady)
+          : highlightForOpeningStep(openingStep?.id);
+  const activeChapter = adoptionHasStarted
+    ? "semantic-adoption"
+    : sourceHasStarted
+      ? "source-placement"
+      : "opening";
+  const activePhase = adoptionHasStarted
+    ? adoptionView.phase
+    : sourceHasStarted
+      ? sourceView.phase
+      : openingView.phase;
+  const activeStep = adoptionHasStarted
+    ? adoptionStep?.id
+    : sourceHasStarted
+      ? sourceStep?.id
+      : openingStep?.id;
 
   const openingPrerequisiteMessage = !presentation
     ? "Waiting for the workbench to report its current project, view, and selection."
@@ -537,6 +655,84 @@ export function OpeningOnboardingExperience() {
     });
   };
 
+  const adoptionReviewable = reviewableSemanticAdoptionObserved(
+    placement,
+    adoptionView.placementHandoff,
+  );
+  const adoptionObserved = adoptedSemanticPlacementObserved(
+    placement,
+    adoptionView.placementHandoff,
+  );
+  let adoptionPrerequisiteMessage =
+    adoptionStep?.prerequisite ??
+    "Complete the visible semantic-adoption review step.";
+  if (!presentation || !placement) {
+    adoptionPrerequisiteMessage =
+      "Waiting for the Workbench to report projection, placement, persistence, and canonical truth.";
+  } else if (adoptionView.paused) {
+    adoptionPrerequisiteMessage =
+      placement.operationState === "accepting"
+        ? "Guidance is paused. The already-requested semantic commit will continue; resume to inspect its durable result."
+        : "Guidance is paused. Resume to continue from this same evidence state.";
+  } else if (adoptionStep?.id === "adopt-placement") {
+    if (
+      placement.operationState === "accepting" ||
+      placement.persistenceState === "saving"
+    ) {
+      adoptionPrerequisiteMessage =
+        "Saving the human semantic commit. No completion is inferred until the accepted revision is durable.";
+    } else if (adoptionObserved) {
+      adoptionPrerequisiteMessage =
+        "The exact placement is adopted in the new canonical revision. Finish this chapter when ready.";
+    } else if (placement.state === "stale") {
+      adoptionPrerequisiteMessage =
+        "The pending delta is stale against the canonical head. Adoption remains blocked and this guide cannot silently rebase it.";
+    } else if (placement.persistenceState === "conflict") {
+      adoptionPrerequisiteMessage =
+        "The browser ledger changed elsewhere. Reload and inspect the durable state before any semantic commit.";
+    } else if (placement.state === "adopted") {
+      adoptionPrerequisiteMessage =
+        "An adopted placement is visible, but its revision or frozen lineage does not match this chapter. Completion remains blocked.";
+    } else if (adoptionReviewable) {
+      adoptionPrerequisiteMessage =
+        "The exact pending delta is still reviewable. Use the Workbench’s separate Adopt this placement action; the guide cannot click it for you.";
+    } else {
+      adoptionPrerequisiteMessage =
+        "The frozen placement no longer satisfies the exact commit gate. Exit to inspect the host evidence without widening authority.";
+    }
+  } else if (!adoptionReviewable) {
+    adoptionPrerequisiteMessage =
+      placement.state === "stale"
+        ? "The pending placement became stale. Projection guidance and semantic commit are blocked."
+        : "The current placement no longer matches the frozen reviewable handoff. This chapter cannot continue.";
+  } else if (adoptionView.prerequisiteSatisfied) {
+    adoptionPrerequisiteMessage =
+      "The same provisional candidate and exact pending lineage are visible in this projection. Continue when ready.";
+  } else if (adoptionView.mode === "watch_only") {
+    adoptionPrerequisiteMessage = `Applying presentation-only commands. ${adoptionStep?.prerequisite ?? ""}`;
+  }
+
+  const adoptionContinueLabel =
+    adoptionStep?.id === "adopt-placement"
+      ? adoptionObserved
+        ? "Finish adoption chapter"
+        : "Waiting for adoption"
+      : "Continue";
+  const adoptionCanonicalLabel = canonicalFact(
+    placement,
+    adoptionView.placementHandoff?.headRevisionId ?? null,
+  );
+  const adoptionExitTruth = adoptionObserved
+    ? "The accepted revision remains durable. Closing the guide grants no additional authority; it only restores ordinary host gates."
+    : "Closing leaves the exact pending placement unchanged and restores ordinary host gates. It does not adopt anything.";
+  const continueAdoption = () => {
+    dispatchAdoption({
+      type: "continue",
+      placement,
+      presentation,
+    });
+  };
+
   return (
     <div
       className={styles.experience}
@@ -544,9 +740,11 @@ export function OpeningOnboardingExperience() {
       data-morphic-root="onboarding-experience"
       data-onboarding-chapter={activeChapter}
       data-onboarding-mode={
-        sourceHasStarted
-          ? (sourceView.mode ?? undefined)
-          : (openingView.mode ?? undefined)
+        adoptionHasStarted
+          ? (adoptionView.mode ?? undefined)
+          : sourceHasStarted
+            ? (sourceView.mode ?? undefined)
+            : (openingView.mode ?? undefined)
       }
       data-onboarding-phase={activePhase}
       data-onboarding-step={activeStep}
@@ -967,9 +1165,10 @@ export function OpeningOnboardingExperience() {
               <span id="source-placement-completion-status">
                 The exact source and provisional placement evidence are saved.
                 Canonical revision {sourceView.baselineRevisionId ?? "unknown"} is
-                unchanged. Adoption and agent work remain locked. Review again
-                changes presentation only; Close guide restores the host decision
-                gate without adopting anything.
+                unchanged. Continue begins a separate evidence review before the
+                human adoption gate; agent work remains locked. Review again changes
+                presentation only, and Close guide restores ordinary host gates
+                without adopting anything.
               </span>
             </div>
             <div
@@ -992,8 +1191,247 @@ export function OpeningOnboardingExperience() {
               <button
                 aria-describedby="source-placement-completion-status"
                 className={styles.startButton}
+                data-onboarding-action="start-semantic-adoption"
+                disabled={!canStartAdoption}
+                onClick={() =>
+                  dispatchAdoption({
+                    type: "start",
+                    mode: sourceView.mode ?? "interactive",
+                    captionsVisible: sourceView.captionsVisible,
+                    placementHandoff: sourceView.handoff,
+                    placement,
+                  })
+                }
+                type="button"
+              >
+                Continue to adoption review
+              </button>
+              <button
+                aria-describedby="source-placement-completion-status"
+                className={styles.secondaryButton}
                 data-onboarding-action="close"
                 onClick={() => dispatchSource({ type: "skip" })}
+                type="button"
+              >
+                Close guide
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {adoptionGuideActive ? (
+          <section
+            aria-labelledby="semantic-adoption-guide-heading"
+            className={styles.guideRegion}
+            data-morphic-region="onboarding-guide"
+            data-onboarding-guide="semantic-adoption"
+          >
+            <div
+              className={styles.chapterLane}
+              data-morphic-lane="chapter-status"
+              data-state-surface={
+                adoptionView.paused
+                  ? "warning-status-surface"
+                  : adoptionObserved
+                    ? "authoritative-status-surface"
+                    : "provisional-status-surface"
+              }
+            >
+              <span className={styles.laneLabel}>Semantic adoption</span>
+              <div className={styles.progressLine}>
+                <span className={styles.progressPill}>
+                  Step {adoptionView.stepNumber} of {adoptionView.stepCount}
+                </span>
+                <span className={styles.modePill}>
+                  {adoptionView.mode === "watch_only"
+                    ? "Watch only · commit stays yours"
+                    : "Interactive"}
+                </span>
+                {adoptionView.paused ? (
+                  <span className={styles.pausedPill}>Paused</span>
+                ) : null}
+              </div>
+              <p className={styles.chapterSummary}>
+                Same candidate across every projection · only the separate human
+                semantic commit may advance the canonical revision; agent work stays
+                locked.
+              </p>
+            </div>
+
+            <div className={styles.captionLane} data-morphic-lane="captions">
+              <div aria-live="polite" className={styles.guideCopy}>
+                <h2
+                  id="semantic-adoption-guide-heading"
+                  ref={adoptionGuideHeadingRef}
+                  tabIndex={-1}
+                >
+                  {adoptionStep.title}
+                </h2>
+                {adoptionView.captionsVisible ? (
+                  <p className={styles.caption}>{adoptionStep.caption}</p>
+                ) : (
+                  <p className={styles.captionHidden}>
+                    Captions hidden. Use Show captions to restore them.
+                  </p>
+                )}
+              </div>
+              <p
+                className={styles.audioTruth}
+                data-audio-state={adoptionView.audioState}
+              >
+                Narration audio is unavailable in this build.
+              </p>
+              <div
+                aria-label="Observed semantic adoption state"
+                className={styles.stateFacts}
+                data-morphic-lane="semantic-adoption-truth"
+              >
+                <span className={styles.stateFact}>
+                  <span>Candidate</span>
+                  <strong
+                    data-truth-state={placement?.state ?? "loading"}
+                    data-worldstate-id={
+                      adoptionView.placementHandoff?.candidateId ?? undefined
+                    }
+                    title={
+                      adoptionView.placementHandoff?.candidateId ?? undefined
+                    }
+                  >
+                    {adoptionObserved
+                      ? "Adopted"
+                      : adoptionReviewable
+                        ? "Same · provisional"
+                        : "Mismatch · blocked"}
+                  </strong>
+                </span>
+                <span className={styles.stateFact}>
+                  <span>Projection</span>
+                  <strong data-presentation-view={presentation?.view}>
+                    {observedViewLabel(presentation?.view)}
+                  </strong>
+                </span>
+                <span className={styles.stateFact}>
+                  <span>Canonical</span>
+                  <strong
+                    data-truth-state={adoptionObserved ? "accepted" : "pending"}
+                    title={placement?.headRevisionId ?? undefined}
+                  >
+                    {adoptionCanonicalLabel}
+                  </strong>
+                </span>
+              </div>
+            </div>
+
+            <div
+              className={styles.controlLane}
+              data-action-cluster="onboarding-semantic-adoption-controls"
+              data-morphic-lane="playback-controls"
+            >
+              <div>
+                <div className={styles.secondaryControls}>
+                  <button
+                    aria-pressed={adoptionView.captionsVisible}
+                    className={styles.secondaryButton}
+                    data-onboarding-action="toggle-captions"
+                    onClick={() =>
+                      dispatchAdoption({
+                        type: "set_captions",
+                        visible: !adoptionView.captionsVisible,
+                      })
+                    }
+                    type="button"
+                  >
+                    {adoptionView.captionsVisible
+                      ? "Hide captions"
+                      : "Show captions"}
+                  </button>
+                  <button
+                    className={styles.secondaryButton}
+                    data-onboarding-action={
+                      adoptionView.paused ? "resume" : "pause"
+                    }
+                    onClick={() =>
+                      dispatchAdoption({
+                        type: adoptionView.paused ? "resume" : "pause",
+                      })
+                    }
+                    type="button"
+                  >
+                    {adoptionView.paused ? "Resume" : "Pause"}
+                  </button>
+                  <button
+                    aria-describedby="semantic-adoption-exit-truth"
+                    className={styles.secondaryButton}
+                    data-onboarding-action="skip"
+                    onClick={() => dispatchAdoption({ type: "skip" })}
+                    type="button"
+                  >
+                    Exit adoption guide
+                  </button>
+                </div>
+                <p
+                  aria-live="polite"
+                  className={styles.prerequisite}
+                  id="semantic-adoption-prerequisite"
+                >
+                  {adoptionPrerequisiteMessage}
+                </p>
+                <p
+                  className={styles.exitTruth}
+                  id="semantic-adoption-exit-truth"
+                >
+                  {adoptionExitTruth}
+                </p>
+              </div>
+              <button
+                aria-describedby="semantic-adoption-prerequisite"
+                className={styles.continueButton}
+                data-onboarding-action="continue"
+                disabled={!canContinueAdoption}
+                onClick={continueAdoption}
+                type="button"
+              >
+                {adoptionContinueLabel}
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {adoptionCompletionVisible ? (
+          <section
+            aria-labelledby="semantic-adoption-completion-heading"
+            className={styles.completionRegion}
+            data-completion-kind="semantic-adoption"
+            data-morphic-region="onboarding-completion"
+            data-state-surface="authoritative-status-surface"
+          >
+            <div className={styles.completionCopy} role="status">
+              <h2
+                id="semantic-adoption-completion-heading"
+                ref={adoptionCompletionHeadingRef}
+                tabIndex={-1}
+              >
+                Semantic update adopted · agent authority remains separate
+              </h2>
+              <span id="semantic-adoption-completion-status">
+                The original source, exact placement, and accepted revision{
+                  " "
+                }
+                {adoptionView.adoptedHandoff?.acceptedRevisionId ?? "unknown"}
+                {" "}remain linked. No agent brief or run was created. Close guide
+                restores ordinary host gates without granting or using any later
+                authority.
+              </span>
+            </div>
+            <div
+              className={styles.completionActions}
+              data-action-cluster="semantic-adoption-completion-choice"
+            >
+              <button
+                aria-describedby="semantic-adoption-completion-status"
+                className={styles.startButton}
+                data-onboarding-action="close"
+                onClick={() => dispatchAdoption({ type: "skip" })}
                 type="button"
               >
                 Close guide
