@@ -2,6 +2,10 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 import { HOME_MOVE_IDS } from "../../src/fixtures";
+import {
+  expectLayoutConformanceAtWidths,
+  RESPONSIVE_LAYOUT_WIDTHS,
+} from "./layout-conformance";
 
 const onboardingRoot = (page: Page) =>
   page.locator("[data-morphic-root='onboarding-experience']");
@@ -717,6 +721,12 @@ test("semantic adoption preserves one candidate across all views and advances ex
       () => document.documentElement.scrollWidth - window.innerWidth,
     ),
   ).toBeLessThanOrEqual(1);
+  await expectLayoutConformanceAtWidths(
+    page,
+    onboarding,
+    RESPONSIVE_LAYOUT_WIDTHS,
+    "semantic review",
+  );
 
   await expect(continueButton).toBeEnabled();
   await continueButton.click();
@@ -787,6 +797,12 @@ test("semantic adoption preserves one candidate across all views and advances ex
   await expect(
     page.getByRole("button", { name: "Prepare agent brief" }),
   ).toBeDisabled();
+  await expectLayoutConformanceAtWidths(
+    page,
+    onboarding,
+    RESPONSIVE_LAYOUT_WIDTHS,
+    "semantic adoption completion",
+  );
 
   await page.getByRole("button", { name: "Close guide" }).click();
   await expect(workbench).toHaveAttribute("data-mutation-access", "enabled");

@@ -311,6 +311,14 @@ authority. Only arrangement, density, navigation, disclosure, and salience may m
 These are implemented local product projections based on borrowed Morphic UX doctrine;
 they are not upstream-approved profiles.
 
+Responsive layout preserves two separate integrity boundaries. First-order regions,
+lanes, panels, and explicitly marked primary objects must remain inside the Studio and
+viewport. Second-order labels and evidence inside them must remain perceptible when a
+parent constrains one axis: wrapping and vertical growth are the default. Intentional
+truncation, scrolling, or focus reveal must be explicitly classified; truncated text
+must retain its full accessible label. Browser tests inspect both boundaries across the
+supported width matrix and at the major replay and onboarding states.
+
 The browser UI holds only presentation state such as the selected view, disclosure,
 draft text, and reset confirmation. Canonical nodes, relations, receipts, event history,
 and revision labels are rebuilt from the persisted ledger. Map coordinates are a

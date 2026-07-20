@@ -379,11 +379,10 @@
 }
 
 .stateFact strong {
-  overflow: hidden;
+  overflow-wrap: anywhere;
   color: #ccd8d4;
   font-size: 0.62rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
 }
 
 .stateFact strong[data-truth-state="saved"],
@@ -562,10 +561,6 @@
   .controlLane {
     grid-column: auto;
     grid-template-columns: 1fr;
-  }
-
-  .stateFacts {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .completionActions {

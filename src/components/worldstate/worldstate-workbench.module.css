@@ -143,7 +143,7 @@
   align-items: center;
   gap: 0.25rem;
   padding: 0 1.1rem;
-  overflow: hidden;
+  overflow: visible;
   color: var(--muted);
   font-size: 0.78rem;
 }
@@ -167,10 +167,9 @@
 
 .scopeCrumbs strong {
   min-width: 0;
-  overflow: hidden;
+  overflow-wrap: anywhere;
   color: var(--paper);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
 }
 
 .runtimeCluster {
@@ -182,9 +181,10 @@
 }
 
 .runtimeBadge {
+  min-width: 0;
   min-height: 1.85rem;
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.42rem;
   border: 1px solid var(--line);
   border-radius: 99rem;
@@ -194,7 +194,8 @@
   font-weight: 750;
   letter-spacing: 0.035em;
   padding: 0.25rem 0.65rem;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .runtimeBadge[data-runtime-mode="fixture"] {
@@ -297,6 +298,8 @@
 .governancePanel,
 .commitPanel,
 .workRegion {
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 0.75rem;
@@ -429,7 +432,7 @@
 }
 
 .viewOption strong { font-size: 0.72rem; }
-.viewOption small { overflow: hidden; color: var(--faint); font-size: 0.56rem; text-overflow: ellipsis; white-space: nowrap; }
+.viewOption small { overflow-wrap: anywhere; color: var(--faint); font-size: 0.56rem; line-height: 1.35; }
 .viewOption[aria-selected="true"] small { color: var(--muted); }
 
 .projectionFrame {
@@ -523,7 +526,7 @@
 
 .treeCopy { min-width: 0; display: flex; flex-direction: column; gap: 0.12rem; }
 .treeCopy small { color: var(--faint); font-size: 0.56rem; letter-spacing: 0.06em; text-transform: uppercase; }
-.treeCopy strong { overflow: hidden; font-size: 0.76rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.treeCopy strong { overflow-wrap: anywhere; font-size: 0.76rem; font-weight: 650; line-height: 1.35; }
 
 .statusMark,
 .postureBadge,
@@ -841,24 +844,26 @@
 .panelHeader { align-items: center; margin-bottom: 0.85rem; }
 .panelHeader h2 { font-size: 1.15rem; }
 .panelHeader > svg { color: var(--mint); }
-.postureBadge i { width: 0.38rem; height: 0.38rem; border-radius: 50%; background: currentColor; }
+.postureBadge { min-width: 0; max-width: 100%; align-items: flex-start; overflow-wrap: anywhere; line-height: 1.35; white-space: normal; }
+.postureBadge i { flex: 0 0 auto; width: 0.38rem; height: 0.38rem; margin-top: 0.18em; border-radius: 50%; background: currentColor; }
 
 .placementPath {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.3rem;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid rgba(255, 156, 133, 0.22);
   border-radius: 0.48rem;
   background: rgba(255, 156, 133, 0.04);
   padding: 0.6rem 0.65rem;
   color: var(--muted);
   font-size: 0.64rem;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .placementPath span,
-.placementPath strong { overflow: hidden; text-overflow: ellipsis; }
+.placementPath strong { overflow: visible; overflow-wrap: anywhere; }
 .placementPath strong { color: var(--coral); }
 .receiptPanel[data-state="adopted"] .placementPath strong { color: var(--mint); }
 .placementPath svg { flex: 0 0 auto; width: 0.65rem; color: var(--faint); }
@@ -987,15 +992,15 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
 .statusFamilies > div[data-state-family="governance"][data-state="adopted"] { border-top-color: var(--mint); }
 .statusFamilies > div[data-state-family="work"] { border-top-color: var(--sky); }
 .statusFamilies span { color: var(--faint); font-size: 0.5rem; letter-spacing: 0.07em; text-transform: uppercase; }
-.statusFamilies strong { overflow: hidden; font-size: 0.67rem; text-overflow: ellipsis; }
-.statusFamilies small { overflow: hidden; color: var(--muted); font-size: 0.52rem; text-overflow: ellipsis; white-space: nowrap; }
+.statusFamilies strong { overflow-wrap: anywhere; font-size: 0.67rem; line-height: 1.35; }
+.statusFamilies small { overflow-wrap: anywhere; color: var(--muted); font-size: 0.52rem; line-height: 1.4; }
 
 .evidenceList { margin: 0.8rem 0 0; padding: 0; list-style: none; }
 .evidenceList li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; border-top: 1px solid var(--line); padding: 0.58rem 0; }
 .evidenceGlyph { color: var(--faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.52rem; }
 .evidenceList div { min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
-.evidenceList strong { overflow: hidden; font-size: 0.64rem; text-overflow: ellipsis; white-space: nowrap; }
-.evidenceList small { overflow: hidden; color: var(--faint); font-size: 0.52rem; text-overflow: ellipsis; white-space: nowrap; }
+.evidenceList strong { overflow-wrap: anywhere; font-size: 0.64rem; line-height: 1.35; }
+.evidenceList small { overflow-wrap: anywhere; color: var(--faint); font-size: 0.52rem; line-height: 1.4; }
 .evidenceList li > span:last-child { color: var(--mint); font-size: 0.53rem; }
 
 .governanceGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.45rem; }
@@ -1061,7 +1066,7 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
 .stepHeader > span:first-child { color: var(--faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.55rem; }
 .stepHeader > div { min-width: 0; }
 .stepHeader small { color: var(--mint); font-size: 0.5rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-.stepHeader h3 { overflow: hidden; margin: 0.12rem 0 0; font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
+.stepHeader h3 { overflow-wrap: anywhere; margin: 0.12rem 0 0; font-size: 0.72rem; line-height: 1.35; }
 .workStep > p { margin: 0.7rem 0; color: var(--muted); font-size: 0.58rem; line-height: 1.5; }
 
 .statusToken[data-state="gated"],
@@ -1116,7 +1121,7 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
 .resultEvidence > div[data-state="open"] > span:first-child { color: var(--amber); text-align: center; }
 .resultEvidence > div > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 0.06rem; }
 .resultEvidence strong { font-size: 0.57rem; }
-.resultEvidence small { overflow: hidden; color: var(--muted); font-size: 0.5rem; text-overflow: ellipsis; white-space: nowrap; }
+.resultEvidence small { overflow-wrap: anywhere; color: var(--muted); font-size: 0.5rem; line-height: 1.4; }
 
 .reconciliationCluster[data-gate-state="ready"] { border-top-color: rgba(142, 231, 200, 0.25); }
 .reconciliationCluster[data-gate-state="satisfied"] { border-top-color: rgba(142, 231, 200, 0.35); }
@@ -1200,7 +1205,7 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
 .contextProjection section > small { display: block; margin-top: 0.12rem; color: var(--faint); font-size: 0.5rem; line-height: 1.4; }
 .contextProjection section > ul { display: grid; gap: 0.34rem; margin: 0.55rem 0 0; padding: 0; list-style: none; }
 .contextProjection li { min-width: 0; display: flex; flex-direction: column; gap: 0.08rem; border-top: 1px solid var(--line); padding-top: 0.34rem; }
-.contextProjection li b { overflow: hidden; font-size: 0.56rem; text-overflow: ellipsis; white-space: nowrap; }
+.contextProjection li b { overflow-wrap: anywhere; font-size: 0.56rem; line-height: 1.35; }
 .contextProjection li span { color: var(--muted); font-size: 0.5rem; line-height: 1.4; }
 .contextProjection li[data-omission-reason="private"] span { color: var(--amber); }
 .contextProjection section > p { color: var(--muted); font-size: 0.54rem; }
@@ -1791,8 +1796,8 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
 .statusRegion svg { flex: 0 0 auto; width: 0.95rem; color: var(--sky); }
 .statusRegion > div > span:not(.statusLight) { min-width: 0; display: flex; flex-direction: column; gap: 0.08rem; }
 .statusRegion small { color: var(--faint); font-size: 0.5rem; letter-spacing: 0.08em; text-transform: uppercase; }
-.statusRegion strong { overflow: hidden; font-size: 0.6rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.persistenceDetail { overflow: hidden; color: var(--muted); font-size: 0.5rem; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.statusRegion strong { overflow-wrap: anywhere; font-size: 0.6rem; font-weight: 700; line-height: 1.35; }
+.persistenceDetail { overflow-wrap: anywhere; color: var(--muted); font-size: 0.5rem; font-style: normal; line-height: 1.4; }
 .undoLane { justify-content: flex-end; }
 .undoLane button { display: inline-flex; align-items: center; gap: 0.3rem; }
 .undoLane button svg { width: 0.8rem; color: currentColor; }
@@ -1832,7 +1837,8 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
   .brandBlock { min-height: 4rem; }
   .scopeCrumbs { grid-column: 1 / -1; grid-row: 2; min-height: 2.6rem; border-top: 1px solid var(--line); }
   .runtimeCluster { grid-column: 2; grid-row: 1; }
-  .runtimeBadge { max-width: 9.5rem; overflow: hidden; text-overflow: ellipsis; }
+  .runtimeCluster { min-width: 0; }
+  .runtimeBadge { max-width: min(12rem, 100%); }
   .iconButton { display: none; }
   .workbenchBody { padding: 0.65rem; gap: 0.65rem; }
   .primaryColumn,
@@ -1903,6 +1909,7 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
   .sourceCapture { padding: 0.7rem; }
   .sourceIcon { width: 2rem; height: 2rem; }
   .sourceCapture blockquote { font-size: 0.77rem; }
+  .panelHeader { align-items: flex-start; flex-direction: column; }
   .regionHeader { padding: 1rem; }
   .regionHeader h1 { font-size: 1.5rem; }
   .projectionFrame { min-height: 25rem; }

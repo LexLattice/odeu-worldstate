@@ -1502,7 +1502,11 @@ export function WorldstateWorkbench({
       data-worldstate-revision={model.revision}
       tabIndex={-1}
     >
-      <a className={styles.skipLink} href="#primary-projection">
+      <a
+        className={styles.skipLink}
+        data-overflow-policy="focus-reveal"
+        href="#primary-projection"
+      >
         Skip to project projection
       </a>
 
@@ -1555,6 +1559,8 @@ export function WorldstateWorkbench({
         >
           <span
             className={styles.runtimeBadge}
+            data-layout-object="primary"
+            data-overflow-policy="wrap"
             data-runtime-mode={model.runtime.mode}
           >
             <i /> {model.runtime.label}
